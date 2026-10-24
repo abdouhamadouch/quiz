@@ -126,6 +126,11 @@ def init_db() -> None:
                 PRIMARY KEY(chat_id, quiz_id, user_id)
             )
         """)
+        if _USE_POSTGRES:
+            # Upgrade the earlier text timestamp schema without discarding stored results.
+            conn.execute("ALTER TABLE quiz_results ALTER COLUMN created_at DROP DEFAULT")
+            conn.execute("ALTER TABLE quiz_results ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at::timestamptz")
+            conn.execute("ALTER TABLE quiz_results ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_quiz_results_chat_quiz ON quiz_results(chat_id, quiz_id, points DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_quizzes_owner ON saved_quizzes(owner_id, id DESC)")
         conn.commit()
