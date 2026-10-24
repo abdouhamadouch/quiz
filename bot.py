@@ -194,8 +194,12 @@ async def collect_setup_media(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     try:
         cfg["source"] = await extract_source_message(msg, context)
-    except Exception as exc:
+    except ValueError as exc:
         await msg.reply_text(f"تعذّر قراءة الملف: {str(exc)[:250]}")
+        return
+    except Exception:
+        log.exception("Source file extraction failed")
+        await msg.reply_text("تعذّر قراءة الملف. تحقق من نوعه وحجمه، ومن إعداد مفتاح Gemini إذا كان المصدر صورة.")
         return
     cfg.pop("stage", None)
     sent = await msg.reply_text(config_text(cfg), reply_markup=config_keyboard(cfg))
@@ -213,8 +217,12 @@ async def quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if msg.reply_to_message:
         try:
             source = await extract_source_message(msg.reply_to_message, context)
-        except Exception as exc:
+        except ValueError as exc:
             await msg.reply_text(f"تعذّر قراءة المصدر: {str(exc)[:250]}\nأرسل نصًا أو ملف PDF/DOCX أو صورة واضحة.")
+            return
+        except Exception:
+            log.exception("Replied source extraction failed")
+            await msg.reply_text("تعذّر قراءة المصدر. تحقق من الملف ومفتاح Gemini إذا كان المصدر صورة.")
             return
     cfg = {
         "chat_id": chat.id, "chat_type": chat.type, "creator_id": user.id,
