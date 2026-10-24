@@ -203,7 +203,7 @@ def list_quizzes(owner_id: int, limit: int = 20, search: str = "") -> list[dict]
             ), (owner_id, pattern, pattern, pattern, limit))
         else:
             cursor = conn.execute(_sql(
-                "SELECT id,title,created_at,question_count,category FROM saved_quizzes "
+                "SELECT id,title,created_at,question_count,category,seconds,mode FROM saved_quizzes "
                 "WHERE owner_id=? ORDER BY id DESC LIMIT ?"
             ), (owner_id, limit))
         return _rows(cursor)
