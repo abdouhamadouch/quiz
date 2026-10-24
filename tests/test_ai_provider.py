@@ -62,6 +62,15 @@ class QuestionValidationTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 generate_questions("source", 2)
 
+    def test_provider_error_details_are_not_exposed(self):
+        ai_provider._preferred = "groq"
+        with patch("ai_provider._groq", side_effect=RuntimeError("secret=TEST_KEY")), patch(
+            "ai_provider._gemini", side_effect=RuntimeError("secret=TEST_KEY")
+        ):
+            with self.assertRaises(RuntimeError) as caught:
+                generate_questions("source", 1)
+        self.assertNotIn("TEST_KEY", str(caught.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
