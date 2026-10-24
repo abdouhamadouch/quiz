@@ -60,3 +60,8 @@ cp .env.example .env
 # Fill .env values, then load them into your shell or use your preferred env loader.
 python bot.py
 ```
+
+
+## Automated checks
+
+GitHub Actions compiles the Python modules and runs unit tests on pushes and pull requests to `main`.
