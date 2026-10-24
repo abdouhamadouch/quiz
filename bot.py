@@ -129,9 +129,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def extract_source_message(message, context: ContextTypes.DEFAULT_TYPE) -> str:
     """Extract text from Telegram text, PDF/DOCX/TXT files, or image OCR."""
-    direct = (message.text or message.caption or "").strip()
+    direct = (message.text or "").strip()
+    caption = (message.caption or "").strip()
     if direct:
         return direct[:14000]
+    if caption and not (message.photo or message.document):
+        return caption[:14000]
     file_id, filename, mime_type = None, "", ""
     if message.photo:
         file_id = message.photo[-1].file_id
@@ -148,7 +151,9 @@ async def extract_source_message(message, context: ContextTypes.DEFAULT_TYPE) ->
     data = bytes(await telegram_file.download_as_bytearray())
     suffix = filename.lower()
     if mime_type.startswith("image/") or suffix.endswith((".jpg", ".jpeg", ".png", ".webp")):
-        return await asyncio.to_thread(extract_text_from_image, data, mime_type or "image/jpeg")
+        image_mime = mime_type if mime_type.startswith("image/") else mimetypes.guess_type(filename)[0] or "image/jpeg"
+        extracted_image = await asyncio.to_thread(extract_text_from_image, data, image_mime)
+        return (caption + "\n\n" + extracted_image).strip()[:14000] if caption else extracted_image
     if suffix.endswith(".pdf") or mime_type == "application/pdf":
         from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(data))
@@ -157,7 +162,7 @@ async def extract_source_message(message, context: ContextTypes.DEFAULT_TYPE) ->
         extracted = "\n".join(page.extract_text() or "" for page in reader.pages).strip()
         if not extracted:
             raise ValueError("لم أجد نصًا قابلًا للاستخراج في PDF؛ إذا كان ممسوحًا ضوئيًا أرسل الصفحات كصور.")
-        return extracted[:14000]
+        return (caption + "\n\n" + extracted).strip()[:14000] if caption else extracted[:14000]
     if suffix.endswith(".docx") or "wordprocessingml" in mime_type:
         from docx import Document
         document = Document(io.BytesIO(data))
@@ -168,9 +173,10 @@ async def extract_source_message(message, context: ContextTypes.DEFAULT_TYPE) ->
         extracted = "\n".join(paragraphs).strip()
         if not extracted:
             raise ValueError("ملف DOCX لا يحتوي على نص قابل للقراءة.")
-        return extracted[:14000]
+        return (caption + "\n\n" + extracted).strip()[:14000] if caption else extracted[:14000]
     if suffix.endswith(".txt") or mime_type.startswith("text/"):
-        return data.decode("utf-8-sig", errors="replace")[:14000].strip()
+        extracted_text = data.decode("utf-8-sig", errors="replace").strip()
+        return (caption + "\n\n" + extracted_text).strip()[:14000] if caption else extracted_text[:14000]
     raise ValueError("نوع الملف غير مدعوم. استخدم PDF أو DOCX أو TXT أو صورة.")
 
 
