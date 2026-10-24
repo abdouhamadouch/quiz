@@ -679,6 +679,7 @@ async def cancel_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         else:
             pending_setup.pop((chat_id, update.effective_user.id), None)
             pending_question_edits.pop((chat_id, update.effective_user.id), None)
+            context.user_data.pop("assistant_pending_rename", None)
             await update.effective_message.reply_text("أُلغي أي إعداد أو تعديل شخصي قيد الانتظار.")
         return
     await finish(context, chat_id, cancelled=True)
