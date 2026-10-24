@@ -185,6 +185,13 @@ async def answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         score["correct"] += 1
     await query.answer("✅ صحيح! +10 نقاط" if correct else "❌ إجابة غير صحيحة", show_alert=True)
 
+    if group_chat(session["chat_type"]):
+        try:
+            feedback = "إجابة صحيحة (+10 نقاط)" if correct else "إجابة غير صحيحة"
+            await context.bot.send_message(chat_id, f"{user.full_name}: {feedback}")
+        except Exception:
+            log.exception("Unable to post group answer feedback")
+
     if session["chat_type"] == ChatType.PRIVATE:
         timer = session.get("timer")
         if timer:
