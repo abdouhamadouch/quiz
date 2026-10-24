@@ -165,8 +165,7 @@ async def extract_source_message(message, context: ContextTypes.DEFAULT_TYPE) ->
         for table in document.tables:
             for row in table.rows:
                 paragraphs.append(" | ".join(cell.text.strip() for cell in row.cells))
-        extracted = "
-".join(paragraphs).strip()
+        extracted = "\n".join(paragraphs).strip()
         if not extracted:
             raise ValueError("ملف DOCX لا يحتوي على نص قابل للقراءة.")
         return extracted[:14000]
