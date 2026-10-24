@@ -22,6 +22,7 @@ Create distinct multiple-choice questions with exactly four plausible, distinct 
 Do not invent facts not supported by the source. Avoid ambiguous questions. Use the language most appropriate to the source and its learners.
 Do not include Markdown fences or text outside the JSON object."""
 
+
 def _parse_json(raw: str) -> dict[str, Any]:
     raw = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", raw.strip(), flags=re.I)
     start, end = raw.find("{"), raw.rfind("}")
@@ -32,12 +33,12 @@ def _parse_json(raw: str) -> dict[str, Any]:
         raise ValueError("AI response JSON must be an object")
     return data
 
+
 def validate_questions(data: dict[str, Any], count: int) -> list[dict[str, Any]]:
     raw = data.get("questions", [])
     if not isinstance(raw, list):
         return []
-    result = []
-    seen = set()
+    result, seen = [], set()
     for item in raw:
         if not isinstance(item, dict):
             continue
@@ -57,57 +58,70 @@ def validate_questions(data: dict[str, Any], count: int) -> list[dict[str, Any]]
             continue
         seen.add(key)
         result.append({
-            "question": question[:900],
-            "options": [x[:160] for x in options],
-            "answer": answer,
-            "explanation": str(item.get("explanation", "")).strip()[:700],
+            "question": question[:900], "options": [x[:160] for x in options],
+            "answer": answer, "explanation": str(item.get("explanation", "")).strip()[:700],
         })
         if len(result) >= count:
             break
     return result
 
-def _groq(source: str, count: int) -> dict[str, Any]:
+
+def _user_prompt(source: str, count: int, topic: str, difficulty: str) -> str:
+    levels = {
+        "easy": "Easy: test basic recall and straightforward understanding.",
+        "medium": "Medium: test understanding and application, with plausible distractors.",
+        "hard": "Hard: test deeper understanding and careful distinctions without ambiguity.",
+    }
+    topic_line = f"Focus topic: {topic[:300]}\n" if topic.strip() else ""
+    return (
+        f"Create {count} questions from the source below.\n"
+        f"Difficulty: {levels.get(difficulty, levels['medium'])}\n{topic_line}"
+        "Make every question answerable from the source and keep explanations concise.\n\n"
+        f"SOURCE:\n{source[:14000]}"
+    )
+
+
+def _groq(source: str, count: int, topic: str, difficulty: str) -> dict[str, Any]:
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is not configured")
     response = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
         json={
-            "model": GROQ_MODEL,
-            "temperature": 0.2,
-            "response_format": {"type": "json_object"},
+            "model": GROQ_MODEL, "temperature": 0.2, "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"Create {count} questions from this source:\n\n{source[:14000]}"},
+                {"role": "user", "content": _user_prompt(source, count, topic, difficulty)},
             ],
-        },
-        timeout=(10, 50),
+        }, timeout=(10, 50),
     )
     response.raise_for_status()
     return _parse_json(response.json()["choices"][0]["message"]["content"])
 
-def _gemini(source: str, count: int) -> dict[str, Any]:
+
+def _gemini(source: str, count: int, topic: str, difficulty: str) -> dict[str, Any]:
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not configured")
     response = requests.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
         params={"key": GEMINI_API_KEY},
         json={
-            "contents": [{"parts": [{"text": f"{SYSTEM_PROMPT}\n\nCreate {count} questions from this source:\n\n{source[:14000]}"}]}],
+            "contents": [{"parts": [{"text": f"{SYSTEM_PROMPT}\n\n{_user_prompt(source, count, topic, difficulty)}"}]}],
             "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
-        },
-        timeout=(10, 50),
+        }, timeout=(10, 50),
     )
     response.raise_for_status()
     candidates = response.json().get("candidates", [])
     if not candidates:
         raise ValueError("Gemini returned no candidates")
     parts = candidates[0].get("content", {}).get("parts", [])
-    text = "".join(str(p.get("text", "")) for p in parts)
-    return _parse_json(text)
+    return _parse_json("".join(str(p.get("text", "")) for p in parts))
 
-def generate_questions(source: str, count: int) -> tuple[list[dict[str, Any]], str]:
-    """Try the preferred provider first, then fail over; rotate preference after success."""
+
+def generate_questions(
+    source: str, count: int, topic: str = "", difficulty: str = "medium"
+) -> tuple[list[dict[str, Any]], str]:
+    """Try preferred provider first and fail over to the other provider."""
     global _preferred
     with _lock:
         first = _preferred
@@ -116,7 +130,7 @@ def generate_questions(source: str, count: int) -> tuple[list[dict[str, Any]], s
     providers = {"groq": _groq, "gemini": _gemini}
     for name in order:
         try:
-            questions = validate_questions(providers[name](source, count), count)
+            questions = validate_questions(providers[name](source, count, topic, difficulty), count)
             if not questions:
                 raise ValueError("provider returned no valid questions")
             with _lock:
