@@ -12,7 +12,7 @@ A separate Telegram quiz bot built with Python and `python-telegram-bot`. It cre
 - `/cancel`: cancel the active quiz without saving that session's scores.
 - `/reset`: clear the conversation's saved leaderboard.
 - `/leaderboard`: display saved scores.
-- SQLite leaderboard stored on a Render persistent disk; `/health` endpoint for Render health checks.
+- SQLite leaderboard and `/health` endpoint for Render health checks.
 
 ## Required environment variables
 
@@ -33,7 +33,7 @@ Never commit real tokens or API keys.
 4. Render reads `render.yaml`, installs `requirements.txt`, and starts `python bot.py`.
 5. Verify the service health endpoint at `/health` and then send `/start` to the Telegram bot.
 
-The included persistent disk is configured for SQLite. Availability of persistent disks depends on the Render plan; if unavailable, use a supported persistent database and adjust the database layer before deploying.
+The Blueprint uses local SQLite so it can be tried on a free web service, but the local filesystem is ephemeral: leaderboard data may be lost when Render restarts or redeploys the service. For durable production results, attach a supported persistent disk on an eligible paid plan or migrate the database layer to managed PostgreSQL. Render free web services may sleep when idle, so they are not a guarantee of uninterrupted 24/7 bot availability.
 
 ## Group setup
 
