@@ -1,0 +1,127 @@
+"""Question generation with validated JSON output and Groq/Gemini failover."""
+from __future__ import annotations
+
+import json
+import os
+import re
+import threading
+from typing import Any
+
+import requests
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+_lock = threading.Lock()
+_preferred = "groq"
+
+SYSTEM_PROMPT = """You are a careful educational assessment author. Use ONLY the supplied source.
+Return only JSON: {"questions":[{"question":"...","options":["A","B","C","D"],"answer":0,"explanation":"..."}]}.
+Create distinct multiple-choice questions with exactly four plausible, distinct options. answer is a zero-based integer 0-3.
+Do not invent facts not supported by the source. Avoid ambiguous questions. Use the language most appropriate to the source and its learners.
+Do not include Markdown fences or text outside the JSON object."""
+
+def _parse_json(raw: str) -> dict[str, Any]:
+    raw = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", raw.strip(), flags=re.I)
+    start, end = raw.find("{"), raw.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("AI response did not contain a JSON object")
+    data = json.loads(raw[start:end + 1])
+    if not isinstance(data, dict):
+        raise ValueError("AI response JSON must be an object")
+    return data
+
+def validate_questions(data: dict[str, Any], count: int) -> list[dict[str, Any]]:
+    raw = data.get("questions", [])
+    if not isinstance(raw, list):
+        return []
+    result = []
+    seen = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        question = str(item.get("question", "")).strip()
+        options = item.get("options")
+        try:
+            answer = int(item.get("answer"))
+        except (TypeError, ValueError):
+            continue
+        if not question or not isinstance(options, list) or len(options) != 4 or answer not in range(4):
+            continue
+        options = [str(x).strip() for x in options]
+        if any(not x for x in options) or len({x.casefold() for x in options}) != 4:
+            continue
+        key = question.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append({
+            "question": question[:900],
+            "options": [x[:160] for x in options],
+            "answer": answer,
+            "explanation": str(item.get("explanation", "")).strip()[:700],
+        })
+        if len(result) >= count:
+            break
+    return result
+
+def _groq(source: str, count: int) -> dict[str, Any]:
+    if not GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY is not configured")
+    response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+        json={
+            "model": GROQ_MODEL,
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": f"Create {count} questions from this source:\n\n{source[:14000]}"},
+            ],
+        },
+        timeout=(10, 50),
+    )
+    response.raise_for_status()
+    return _parse_json(response.json()["choices"][0]["message"]["content"])
+
+def _gemini(source: str, count: int) -> dict[str, Any]:
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
+    response = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+        params={"key": GEMINI_API_KEY},
+        json={
+            "contents": [{"parts": [{"text": f"{SYSTEM_PROMPT}\n\nCreate {count} questions from this source:\n\n{source[:14000]}"}]}],
+            "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
+        },
+        timeout=(10, 50),
+    )
+    response.raise_for_status()
+    candidates = response.json().get("candidates", [])
+    if not candidates:
+        raise ValueError("Gemini returned no candidates")
+    parts = candidates[0].get("content", {}).get("parts", [])
+    text = "".join(str(p.get("text", "")) for p in parts)
+    return _parse_json(text)
+
+def generate_questions(source: str, count: int) -> tuple[list[dict[str, Any]], str]:
+    """Try the preferred provider first, then fail over; rotate preference after success."""
+    global _preferred
+    with _lock:
+        first = _preferred
+    order = [first, "gemini" if first == "groq" else "groq"]
+    errors = []
+    providers = {"groq": _groq, "gemini": _gemini}
+    for name in order:
+        try:
+            questions = validate_questions(providers[name](source, count), count)
+            if not questions:
+                raise ValueError("provider returned no valid questions")
+            with _lock:
+                _preferred = "gemini" if name == "groq" else "groq"
+            return questions, name.upper()
+        except Exception as exc:
+            errors.append(f"{name}: {type(exc).__name__}: {exc}")
+    raise RuntimeError("Both AI providers failed. " + " | ".join(errors))
