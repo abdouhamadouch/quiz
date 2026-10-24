@@ -9,7 +9,7 @@ Telegram bot for generating educational multiple-choice quizzes from lesson text
 - Source input: reply to text/caption or upload PDF, DOCX, TXT, or a clear image. PDF extraction supports text-based PDFs; scanned PDFs should be sent as images. Image text extraction uses Gemini and requires GEMINI_API_KEY.
 - Library management: /library, /searchquiz, /previewquiz, /deletequiz (confirmation and ownership check), /copyquiz, /renamequiz, /editquiz, and /setcategory. Categories are searchable.
 - /stats shows personal saved-quiz totals and accumulated group score statistics. Common Arabic text aliases are supported for starting a quiz, opening the library, viewing the leaderboard, and opening personal statistics.
-- /sharequiz ID creates a group draft. A group admin or bot owner must run /startquiz before a competition begins. Drafts are stored in the configured database and can survive a restart.
+- Creating a quiz directly in a group and publishing saved review polls requires the bot owner or a group admin; direct group quizzes start after generation. /sharequiz ID instead creates a waiting draft, which the bot owner or a group admin starts with /startquiz. Drafts are stored in the configured database and can survive a restart.
 - /reviewquiz ID advances through native quiz polls manually; /publishquiz ID publishes all polls at once.
 - Timed competitive exams award 10 points per correct answer, show final rankings, and save overall and per-quiz group results. Use /quizresults ID in the group.
 - /leaderboard, /reset, /end, /stop, and /cancel.
@@ -62,7 +62,7 @@ Saved quizzes, scores, per-quiz results, and waiting group drafts are stored in 
 1. Connect this repository to Render using the Blueprint.
 2. Set BOT_TOKEN, OWNER_IDS, and the AI key(s).
 3. For persistence across deploys, set DATABASE_URL to a PostgreSQL connection URL. If it is unset, SQLite is used.
-4. Verify /health, then test /start and quiz creation in Telegram.
+4. Add the bot as a group administrator (so Telegram reliably reports member roles), verify /health, then test /start and quiz creation in Telegram.
 
 ## Known limitations
 
