@@ -154,8 +154,7 @@ async def extract_source_message(message, context: ContextTypes.DEFAULT_TYPE) ->
         reader = PdfReader(io.BytesIO(data))
         if len(reader.pages) > 40:
             raise ValueError("ملفات PDF محدودة بـ 40 صفحة في المرة الواحدة.")
-        extracted = "
-".join(page.extract_text() or "" for page in reader.pages).strip()
+        extracted = "\n".join(page.extract_text() or "" for page in reader.pages).strip()
         if not extracted:
             raise ValueError("لم أجد نصًا قابلًا للاستخراج في PDF؛ إذا كان ممسوحًا ضوئيًا أرسل الصفحات كصور.")
         return extracted[:14000]
