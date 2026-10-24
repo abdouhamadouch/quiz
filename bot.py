@@ -206,6 +206,9 @@ async def quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg, chat, user = update.effective_message, update.effective_chat, update.effective_user
     if not msg or not chat or not user:
         return
+    if group_chat(chat.type) and not await authorized(update, context):
+        await msg.reply_text("إنشاء الاختبارات الجماعية متاح للمالك أو مشرفي المجموعة فقط. يمكنك إنشاء الاختبار في الخاص ثم مشاركته.")
+        return
     source = ""
     if msg.reply_to_message:
         try:
@@ -317,6 +320,12 @@ async def configure(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.edit_message_text("انتهت جلسة الإعداد. أرسل /quiz للبدء من جديد.")
         return
     cfg = pending_setup[key]
+    if query.from_user.id != cfg.get("creator_id"):
+        await query.answer("هذه الإعدادات تخص الشخص الذي بدأها.", show_alert=True)
+        return
+    if group_chat(query.message.chat.type) and action == "generate" and not await authorized(update, context):
+        await query.answer("إنشاء الاختبار الجماعي متاح للمالك أو مشرفي المجموعة فقط.", show_alert=True)
+        return
     if action == "cancel":
         pending_setup.pop(key, None)
         await query.edit_message_text("تم إلغاء إعداد الاختبار.")
@@ -921,6 +930,9 @@ async def start_shared_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def launch_saved_review(update: Update, context: ContextTypes.DEFAULT_TYPE, mode: str) -> None:
     msg, chat, user = update.effective_message, update.effective_chat, update.effective_user
     if not msg or not chat or not user:
+        return
+    if group_chat(chat.type) and not await authorized(update, context):
+        await msg.reply_text("نشر الاختبارات في المجموعة متاح للمالك أو مشرفي المجموعة فقط.")
         return
     if not context.args or not context.args[0].isdigit():
         await msg.reply_text(f"الصيغة: /{'reviewquiz' if mode == 'review_manual' else 'publishquiz'} ID")
