@@ -30,6 +30,18 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 OWNER_IDS = {int(v) for v in os.getenv("OWNER_IDS", "").split(",") if v.strip().isdigit()}
 MAX_QUESTIONS = 20
 MIN_SECONDS, MAX_SECONDS = 10, 60
+
+
+def _env_choice(name: str, default: int, allowed: set[int]) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if value in allowed else default
+
+
+DEFAULT_QUESTIONS = _env_choice("DEFAULT_QUESTIONS", 5, {5, 10, 15, 20})
+DEFAULT_SECONDS = _env_choice("DEFAULT_SECONDS", 20, {10, 20, 30, 45, 60})
 sessions: dict[int, dict] = {}
 pending_setup: dict[tuple[int, int], dict] = {}
 group_drafts: dict[int, dict] = {}
@@ -239,7 +251,7 @@ async def quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
     cfg = {
         "chat_id": chat.id, "chat_type": chat.type, "creator_id": user.id,
-        "source": source.strip(), "topic": "", "count": 5, "seconds": 20,
+        "source": source.strip(), "topic": "", "count": DEFAULT_QUESTIONS, "seconds": DEFAULT_SECONDS,
         "difficulty": "medium", "mode": "exam",
     }
     pending_setup[(chat.id, user.id)] = cfg
