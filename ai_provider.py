@@ -16,7 +16,7 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 _lock = threading.Lock()
 _preferred = "groq"
 
-SYSTEM_PROMPT = """You are a careful educational assessment author. Use ONLY the supplied source.
+SYSTEM_PROMPT = """You are a careful educational assessment author. Use ONLY the supplied source unless it explicitly requests general-knowledge questions about a topic.
 Return only JSON: {"questions":[{"question":"...","options":["A","B","C","D"],"answer":0,"explanation":"..."}]}.
 Create distinct multiple-choice questions with exactly four plausible, distinct options. answer is a zero-based integer 0-3.
 Do not invent facts not supported by the source. Avoid ambiguous questions. Use the language most appropriate to the source and its learners.
@@ -73,8 +73,10 @@ def _user_prompt(source: str, count: int, topic: str, difficulty: str) -> str:
         "hard": "Hard: test deeper understanding and careful distinctions without ambiguity.",
     }
     topic_line = f"Focus topic: {topic[:300]}\n" if topic.strip() else ""
+    general_topic = source.startswith("General educational topic:")
+    source_rule = ("Use accurate general knowledge about the stated topic; do not quiz the learner on the instruction text itself." if general_topic else "Use only facts supported by the source material.")
     return (
-        f"Create {count} questions from the source below.\n"
+        f"Create {count} questions. {source_rule}\n"
         f"Difficulty: {levels.get(difficulty, levels['medium'])}\n{topic_line}"
         "Make every question answerable from the source and keep explanations concise.\n\n"
         f"SOURCE:\n{source[:14000]}"
