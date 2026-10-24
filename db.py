@@ -234,7 +234,7 @@ def copy_quiz(quiz_id: int, owner_id: int) -> int | None:
 
 
 def save_group_draft(chat_id: int, owner_id: int, quiz: dict) -> None:
-    payload = json.dumps(quiz, ensure_ascii=False)
+    payload = json.dumps(quiz, ensure_ascii=False, default=str)
     with _lock, connect() as conn:
         conn.execute(_sql("""
             INSERT INTO group_drafts(chat_id,owner_id,quiz_id,quiz_json,updated_at)
