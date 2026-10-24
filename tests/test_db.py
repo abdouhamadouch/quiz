@@ -63,6 +63,19 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(rows[0]["name"], "Learner")
         self.assertEqual(rows[0]["points"], 10)
 
+    def test_category_and_personal_stats(self):
+        quiz_id = db.save_quiz(101, "English verbs", "Lesson text", SAMPLE_QUESTIONS)
+        self.assertTrue(db.set_quiz_category(quiz_id, 101, "Grammar"))
+        self.assertEqual(db.list_quizzes(101, search="Grammar")[0]["category"], "Grammar")
+        db.save_session_scores(-1001, {
+            101: {"name": "Learner", "points": 10, "correct": 1, "answered": 1}
+        })
+        stats = db.user_stats(101)
+        self.assertEqual(stats["quiz_count"], 1)
+        self.assertEqual(stats["points"], 10)
+        self.assertEqual(stats["correct"], 1)
+        self.assertEqual(stats["answered"], 1)
+
     def test_init_is_safe_to_run_more_than_once(self):
         db.init_db()
         db.init_db()
