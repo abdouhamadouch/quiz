@@ -45,11 +45,16 @@ def validate_questions(data: dict[str, Any], count: int) -> list[dict[str, Any]]
             continue
         question = str(item.get("question", "")).strip()
         options = item.get("options")
+        raw_answer = item.get("answer")
+        if isinstance(raw_answer, bool) or not isinstance(raw_answer, (int, float, str)):
+            continue
+        if isinstance(raw_answer, float) and not raw_answer.is_integer():
+            continue
         try:
-            answer = int(item.get("answer"))
+            answer = int(raw_answer)
         except (TypeError, ValueError):
             continue
-        if not question or not isinstance(options, list) or len(options) != 4 or isinstance(item.get("answer"), bool) or answer not in range(4):
+        if not question or not isinstance(options, list) or len(options) != 4 or answer not in range(4):
             continue
         options = [str(x).strip() for x in options]
         if any(not x for x in options) or len({re.sub(r"\s+", " ", x).casefold() for x in options}) != 4:
