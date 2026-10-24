@@ -198,7 +198,7 @@ def list_quizzes(owner_id: int, limit: int = 20, search: str = "") -> list[dict]
         if search.strip():
             pattern = f"%{search.strip()[:100]}%"
             cursor = conn.execute(_sql(
-                "SELECT id,title,created_at,question_count,category FROM saved_quizzes "
+                "SELECT id,title,created_at,question_count,category,seconds,mode FROM saved_quizzes "
                 "WHERE owner_id=? AND (title LIKE ? OR source LIKE ? OR category LIKE ?) ORDER BY id DESC LIMIT ?"
             ), (owner_id, pattern, pattern, pattern, limit))
         else:
