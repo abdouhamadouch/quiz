@@ -85,7 +85,7 @@ def init_db() -> None:
                     title TEXT NOT NULL, source TEXT NOT NULL, questions_json TEXT NOT NULL,
                     seconds INTEGER NOT NULL DEFAULT 20, mode TEXT NOT NULL DEFAULT 'exam',
                     difficulty TEXT NOT NULL DEFAULT 'medium', question_count INTEGER NOT NULL DEFAULT 5,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    category TEXT NOT NULL DEFAULT 'عام', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             conn.execute("""
@@ -110,6 +110,7 @@ def init_db() -> None:
                 ("mode", "TEXT NOT NULL DEFAULT 'exam'"),
                 ("difficulty", "TEXT NOT NULL DEFAULT 'medium'"),
                 ("question_count", "INTEGER NOT NULL DEFAULT 5"),
+                ("category", "TEXT NOT NULL DEFAULT 'عام'"),
             ):
                 try:
                     conn.execute(f"ALTER TABLE saved_quizzes ADD COLUMN {column} {definition}")
