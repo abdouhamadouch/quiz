@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+import mimetypes
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,10 +16,12 @@ from telegram.ext import (
     MessageHandler, PollAnswerHandler, filters,
 )
 
-from ai_provider import generate_questions
+from ai_provider import extract_text_from_image, generate_questions
 from db import (
-    get_quiz, init_db, leaderboard, list_quizzes, reset_chat,
-    save_quiz, save_session_scores,
+    copy_quiz, delete_group_draft, delete_quiz as db_delete_quiz, get_group_drafts,
+    get_quiz, init_db, leaderboard, list_quizzes, quiz_leaderboard, rename_quiz,
+    reset_chat, save_group_draft, save_quiz, save_quiz_results, save_session_scores,
+    update_quiz_questions,
 )
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -29,6 +33,7 @@ MIN_SECONDS, MAX_SECONDS = 10, 60
 sessions: dict[int, dict] = {}
 pending_setup: dict[tuple[int, int], dict] = {}
 group_drafts: dict[int, dict] = {}
+pending_question_edits: dict[tuple[int, int], dict] = {}
 sessions_lock = asyncio.Lock()
 
 
@@ -95,6 +100,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await msg.reply_text("لم أجد هذا الاختبار في مكتبتك.")
             return
         group_drafts[chat.id] = {"quiz": saved, "owner_id": owner_id}
+        save_group_draft(chat.id, owner_id, saved)
         await msg.reply_text(
             f"تم تجهيز «{saved['title']}» ({len(saved['questions'])} سؤالًا) كمسودة في هذه المجموعة. "
             "لم يبدأ الامتحان بعد؛ على المالك أو أحد مشرفي المجموعة كتابة /startquiz."
@@ -114,15 +120,85 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def extract_source_message(message, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Extract text from Telegram text, PDF/DOCX/TXT files, or image OCR."""
+    direct = (message.text or message.caption or "").strip()
+    if direct:
+        return direct[:14000]
+    file_id, filename, mime_type = None, "", ""
+    if message.photo:
+        file_id = message.photo[-1].file_id
+        filename, mime_type = "photo.jpg", "image/jpeg"
+    elif message.document:
+        file_id = message.document.file_id
+        filename = message.document.file_name or "upload"
+        mime_type = message.document.mime_type or mimetypes.guess_type(filename)[0] or ""
+    else:
+        raise ValueError("لم أجد نصًا أو ملفًا مدعومًا في الرسالة.")
+    if message.document and message.document.file_size and message.document.file_size > 15 * 1024 * 1024:
+        raise ValueError("حجم الملف أكبر من 15 ميغابايت.")
+    telegram_file = await context.bot.get_file(file_id)
+    data = bytes(await telegram_file.download_as_bytearray())
+    suffix = filename.lower()
+    if mime_type.startswith("image/") or suffix.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        return await asyncio.to_thread(extract_text_from_image, data, mime_type or "image/jpeg")
+    if suffix.endswith(".pdf") or mime_type == "application/pdf":
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        if len(reader.pages) > 40:
+            raise ValueError("ملفات PDF محدودة بـ 40 صفحة في المرة الواحدة.")
+        extracted = "
+".join(page.extract_text() or "" for page in reader.pages).strip()
+        if not extracted:
+            raise ValueError("لم أجد نصًا قابلًا للاستخراج في PDF؛ إذا كان ممسوحًا ضوئيًا أرسل الصفحات كصور.")
+        return extracted[:14000]
+    if suffix.endswith(".docx") or "wordprocessingml" in mime_type:
+        from docx import Document
+        document = Document(io.BytesIO(data))
+        paragraphs = [p.text.strip() for p in document.paragraphs if p.text.strip()]
+        for table in document.tables:
+            for row in table.rows:
+                paragraphs.append(" | ".join(cell.text.strip() for cell in row.cells))
+        extracted = "
+".join(paragraphs).strip()
+        if not extracted:
+            raise ValueError("ملف DOCX لا يحتوي على نص قابل للقراءة.")
+        return extracted[:14000]
+    if suffix.endswith(".txt") or mime_type.startswith("text/"):
+        return data.decode("utf-8-sig", errors="replace")[:14000].strip()
+    raise ValueError("نوع الملف غير مدعوم. استخدم PDF أو DOCX أو TXT أو صورة.")
+
+
+async def collect_setup_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg, chat, user = update.effective_message, update.effective_chat, update.effective_user
+    if not msg or not chat or not user:
+        return
+    cfg = pending_setup.get((chat.id, user.id))
+    if not cfg:
+        return
+    if cfg.get("stage") != "source":
+        await msg.reply_text("أرسل الموضوع أولًا، ثم أرفق ملف الدرس أو صورته في خطوة المصدر.")
+        return
+    try:
+        cfg["source"] = await extract_source_message(msg, context)
+    except Exception as exc:
+        await msg.reply_text(f"تعذّر قراءة الملف: {str(exc)[:250]}")
+        return
+    cfg.pop("stage", None)
+    sent = await msg.reply_text(config_text(cfg), reply_markup=config_keyboard(cfg))
+    cfg["config_message_id"] = sent.message_id
+
+
 async def quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg, chat, user = update.effective_message, update.effective_chat, update.effective_user
     if not msg or not chat or not user:
         return
     source = ""
     if msg.reply_to_message:
-        source = msg.reply_to_message.text or msg.reply_to_message.caption or ""
-        if not source:
-            await msg.reply_text("حاليًا يدعم البوت النص أو التعليق النصي على الوسائط فقط.")
+        try:
+            source = await extract_source_message(msg.reply_to_message, context)
+        except Exception as exc:
+            await msg.reply_text(f"تعذّر قراءة المصدر: {str(exc)[:250]}\nأرسل نصًا أو ملف PDF/DOCX أو صورة واضحة.")
             return
     cfg = {
         "chat_id": chat.id, "chat_type": chat.type, "creator_id": user.id,
@@ -141,6 +217,39 @@ async def quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def collect_setup_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg, chat, user = update.effective_message, update.effective_chat, update.effective_user
     if not msg or not chat or not user:
+        return
+    edit_key = (chat.id, user.id)
+    edit = pending_question_edits.get(edit_key)
+    if edit:
+        lines = (msg.text or "").splitlines()
+        if len(lines) < 6:
+            await msg.reply_text("التنسيق غير مكتمل. أرسل نص السؤال، ثم 4 خيارات، ثم رقم الإجابة الصحيحة من 1 إلى 4، ثم التفسير اختياريًا.")
+            return
+        question = lines[0].strip()
+        options = [line.strip() for line in lines[1:5]]
+        try:
+            answer_index = int(lines[5].strip()) - 1
+        except ValueError:
+            await msg.reply_text("رقم الإجابة يجب أن يكون من 1 إلى 4.")
+            return
+        if not question or any(not option for option in options) or len({option.casefold() for option in options}) != 4 or answer_index not in range(4):
+            await msg.reply_text("السؤال أو الخيارات غير صالحة. تأكد من وجود 4 خيارات مختلفة ورقم إجابة من 1 إلى 4.")
+            return
+        saved = get_quiz(edit["quiz_id"], user.id)
+        if not saved:
+            pending_question_edits.pop(edit_key, None)
+            await msg.reply_text("لم أعد أجد هذا الاختبار في مكتبتك.")
+            return
+        explanation = "\n".join(lines[6:]).strip()[:700] if len(lines) > 6 else ""
+        saved["questions"][edit["index"]] = {
+            "question": question[:900], "options": [option[:160] for option in options],
+            "answer": answer_index, "explanation": explanation,
+        }
+        if update_quiz_questions(edit["quiz_id"], user.id, saved["questions"]):
+            pending_question_edits.pop(edit_key, None)
+            await msg.reply_text(f"تم تحديث السؤال {edit['index'] + 1} في الاختبار #{edit['quiz_id']}. استخدم /previewquiz {edit['quiz_id']} للمراجعة.")
+        else:
+            await msg.reply_text("تعذّر حفظ التعديل. حاول مرة أخرى.")
         return
     key = (chat.id, user.id)
     cfg = pending_setup.get(key)
@@ -224,7 +333,7 @@ async def configure(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await query.message.reply_text("تعذّر إنشاء الأسئلة. تحقق من مفاتيح Groq وGemini ثم حاول مجددًا.")
             return
         title = cfg["topic"] or (source[:70].replace("\n", " ") if cfg["source"] else "اختبار عام")
-        quiz_id = save_quiz(cfg["creator_id"], title, source, questions)
+        quiz_id = save_quiz(cfg["creator_id"], title, source, questions, cfg["seconds"], cfg["mode"], cfg["difficulty"])
         if cfg["chat_type"] == ChatType.PRIVATE:
             bot = await context.bot.get_me()
             share_url = f"https://t.me/{bot.username}?startgroup=share_{quiz_id}_{cfg['creator_id']}"
@@ -472,6 +581,8 @@ async def finish(context: ContextTypes.DEFAULT_TYPE, chat_id: int, cancelled: bo
         await context.bot.send_message(chat_id, "أُلغي الامتحان ولم تُحفظ نقاط هذه الجلسة.")
         return
     save_session_scores(chat_id, session["scores"])
+    if session.get("quiz_id") is not None:
+        save_quiz_results(chat_id, int(session["quiz_id"]), session["scores"])
     participants = sorted(session["scores"].values(), key=lambda x: (x["points"], x["correct"]), reverse=True)
     lines = ["النتائج النهائية", f"عدد الأسئلة: {len(session['questions'])}"]
     if not participants:
@@ -500,6 +611,7 @@ async def cancel_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if chat_id not in sessions:
         if chat_id in group_drafts:
             group_drafts.pop(chat_id, None)
+            delete_group_draft(chat_id)
             await update.effective_message.reply_text("تم إلغاء مسودة الامتحان المنشورة.")
         else:
             pending_setup.pop((chat_id, update.effective_user.id), None)
@@ -508,17 +620,210 @@ async def cancel_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await finish(context, chat_id, cancelled=True)
 
 
+async def search_quizzes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user, msg, chat = update.effective_user, update.effective_message, update.effective_chat
+    if not user or not msg or not chat:
+        return
+    if chat.type != ChatType.PRIVATE:
+        await msg.reply_text("استخدم /searchquiz في الخاص لحماية خصوصية مكتبتك.")
+        return
+    term = " ".join(context.args).strip()
+    if not term:
+        await msg.reply_text("الصيغة: /searchquiz كلمة أو جزء من العنوان")
+        return
+    rows = list_quizzes(user.id, limit=30, search=term)
+    if not rows:
+        await msg.reply_text("لم أعثر على اختبارات تطابق البحث.")
+        return
+    await msg.reply_text("نتائج البحث:\n" + "\n".join(
+        f"#{row['id']} — {row['title']} ({row['question_count']} سؤالًا)" for row in rows
+    ))
+
+
+async def preview_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user, msg, chat = update.effective_user, update.effective_message, update.effective_chat
+    if not user or not msg or not chat:
+        return
+    if chat.type != ChatType.PRIVATE:
+        await msg.reply_text("المعاينة متاحة في الخاص فقط.")
+        return
+    if not context.args or not context.args[0].isdigit():
+        await msg.reply_text("الصيغة: /previewquiz ID")
+        return
+    saved = get_quiz(int(context.args[0]), user.id)
+    if not saved:
+        await msg.reply_text("لم أجد هذا الاختبار في مكتبتك.")
+        return
+    blocks = [f"معاينة الاختبار #{saved['id']}: {saved['title']}",
+              f"الأسئلة: {len(saved['questions'])} | الصعوبة: {saved.get('difficulty', 'medium')} | الوقت: {saved.get('seconds', 20)} ثانية"]
+    for index, question in enumerate(saved["questions"], 1):
+        blocks.append(
+            f"\n{index}. {question['question']}\n" +
+            "\n".join(f"{n}. {option}" for n, option in enumerate(question["options"], 1)) +
+            f"\nالإجابة: {question['answer'] + 1}. {question['options'][question['answer']]}\nالتفسير: {question.get('explanation', '')}"
+        )
+    chunks, current = [], ""
+    for block in blocks:
+        if len(current) + len(block) > 3500:
+            chunks.append(current)
+            current = ""
+        current += block + "\n"
+    if current:
+        chunks.append(current)
+    for chunk in chunks:
+        await msg.reply_text(chunk)
+    await msg.reply_text(
+        "إدارة هذا الاختبار:\n/editquiz ID رقم_السؤال — تعديل سؤال\n"
+        "/renamequiz ID العنوان — تغيير الاسم\n/copyquiz ID — إنشاء نسخة\n/deletequiz ID — حذف بعد التأكيد"
+    )
+
+
+async def delete_quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user, msg, chat = update.effective_user, update.effective_message, update.effective_chat
+    if not user or not msg or not chat:
+        return
+    if chat.type != ChatType.PRIVATE:
+        await msg.reply_text("حذف الاختبارات متاح في الخاص فقط.")
+        return
+    if not context.args or not context.args[0].isdigit():
+        await msg.reply_text("الصيغة: /deletequiz ID")
+        return
+    quiz_id = int(context.args[0])
+    saved = get_quiz(quiz_id, user.id)
+    if not saved:
+        await msg.reply_text("الاختبار غير موجود في مكتبتك أو لا تملك صلاحية حذفه.")
+        return
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("تأكيد الحذف", callback_data=f"quizdelete:confirm:{quiz_id}"),
+        InlineKeyboardButton("إلغاء", callback_data=f"quizdelete:cancel:{quiz_id}"),
+    ]])
+    await msg.reply_text(f"هل تريد حذف الاختبار #{quiz_id} «{saved['title']}» نهائيًا؟", reply_markup=keyboard)
+
+
+async def confirm_delete_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    try:
+        _, action, raw_id = query.data.split(":")
+        quiz_id = int(raw_id)
+    except (ValueError, AttributeError):
+        await query.answer("طلب غير صالح.", show_alert=True)
+        return
+    if query.message is None or query.message.chat.type != ChatType.PRIVATE:
+        await query.answer("افتح هذا الأمر في الخاص.", show_alert=True)
+        return
+    if action == "cancel":
+        await query.answer("تم الإلغاء.")
+        await query.edit_message_text("أُلغي حذف الاختبار.")
+        return
+    if not get_quiz(quiz_id, query.from_user.id):
+        await query.answer("لا تملك هذا الاختبار أو أنه حُذف بالفعل.", show_alert=True)
+        return
+    if db_delete_quiz(quiz_id, query.from_user.id):
+        await query.answer("تم الحذف.")
+        await query.edit_message_text(f"تم حذف الاختبار #{quiz_id} من مكتبتك.")
+    else:
+        await query.answer("تعذّر حذف الاختبار.", show_alert=True)
+
+
+async def copy_saved_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user, msg, chat = update.effective_user, update.effective_message, update.effective_chat
+    if not user or not msg or not chat:
+        return
+    if chat.type != ChatType.PRIVATE:
+        await msg.reply_text("نسخ الاختبارات متاح في الخاص فقط.")
+        return
+    if not context.args or not context.args[0].isdigit():
+        await msg.reply_text("الصيغة: /copyquiz ID")
+        return
+    new_id = copy_quiz(int(context.args[0]), user.id)
+    if new_id is None:
+        await msg.reply_text("لم أجد الاختبار في مكتبتك.")
+    else:
+        await msg.reply_text(f"تم إنشاء نسخة مستقلة برقم #{new_id}.")
+
+
+async def rename_saved_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user, msg, chat = update.effective_user, update.effective_message, update.effective_chat
+    if not user or not msg or not chat:
+        return
+    if chat.type != ChatType.PRIVATE:
+        await msg.reply_text("تغيير العنوان متاح في الخاص فقط.")
+        return
+    if len(context.args) < 2 or not context.args[0].isdigit():
+        await msg.reply_text("الصيغة: /renamequiz ID العنوان الجديد")
+        return
+    quiz_id, title = int(context.args[0]), " ".join(context.args[1:]).strip()
+    if not title:
+        await msg.reply_text("اكتب عنوانًا جديدًا.")
+        return
+    if rename_quiz(quiz_id, user.id, title):
+        await msg.reply_text(f"تم تغيير عنوان الاختبار #{quiz_id}.")
+    else:
+        await msg.reply_text("لم أجد الاختبار في مكتبتك.")
+
+
+async def edit_saved_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user, msg, chat = update.effective_user, update.effective_message, update.effective_chat
+    if not user or not msg or not chat:
+        return
+    if chat.type != ChatType.PRIVATE:
+        await msg.reply_text("تعديل الأسئلة متاح في الخاص فقط.")
+        return
+    if len(context.args) != 2 or not all(part.isdigit() for part in context.args):
+        await msg.reply_text("الصيغة: /editquiz ID رقم_السؤال")
+        return
+    quiz_id, number = map(int, context.args)
+    saved = get_quiz(quiz_id, user.id)
+    if not saved or not 1 <= number <= len(saved["questions"]):
+        await msg.reply_text("لم أجد الاختبار أو رقم السؤال خارج النطاق.")
+        return
+    pending_question_edits[(chat.id, user.id)] = {"quiz_id": quiz_id, "index": number - 1}
+    q = saved["questions"][number - 1]
+    await msg.reply_text(
+        f"تعديل السؤال {number} في الاختبار #{quiz_id}.\n"
+        "أرسل 7 أسطر على الأقل بهذا الترتيب:\n"
+        "1) نص السؤال\n2) الخيار الأول\n3) الخيار الثاني\n4) الخيار الثالث\n5) الخيار الرابع\n"
+        "6) رقم الإجابة الصحيحة من 1 إلى 4\n7) التفسير (اختياري، ويمكن تركه فارغًا)\n\n"
+        f"السؤال الحالي: {q['question']}\nأرسل /cancel لإلغاء التعديل."
+    )
+
+
+async def show_quiz_results(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg, chat = update.effective_message, update.effective_chat
+    if not msg or not chat:
+        return
+    if not group_chat(chat.type):
+        await msg.reply_text("استخدم /quizresults ID داخل المجموعة التي أُجري فيها الاختبار.")
+        return
+    if not context.args or not context.args[0].isdigit():
+        await msg.reply_text("الصيغة: /quizresults ID")
+        return
+    rows = quiz_leaderboard(chat.id, int(context.args[0]))
+    if not rows:
+        await msg.reply_text("لا توجد نتائج محفوظة لهذا الاختبار في هذه المجموعة.")
+        return
+    await msg.reply_text("نتائج الاختبار\n" + "\n".join(
+        f"{index}. {row['name']} — {row['points']} نقطة ({row['correct']}/{row['answered']} صحيحة)"
+        for index, row in enumerate(rows, 1)
+    ))
+
+
 async def show_library(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user:
+        return
+    if update.effective_chat.type != ChatType.PRIVATE:
+        await update.effective_message.reply_text("افتح البوت في الخاص لإدارة مكتبتك.")
         return
     quizzes = list_quizzes(user.id)
     if not quizzes:
         await update.effective_message.reply_text("مكتبتك فارغة. أنشئ اختبارًا باستخدام /quiz.")
         return
     lines = ["اختباراتك المحفوظة (الأحدث أولًا):"]
-    lines.extend(f"#{q['id']} — {q['title']} ({q['created_at']})" for q in quizzes)
-    lines.append("\nللمشاركة: /sharequiz ID — للمراجعة: /reviewquiz ID — لنشر كل الاستفتاءات: /publishquiz ID")
+    lines.extend(f"#{q['id']} — {q['title']} ({q['question_count']} سؤالًا)" for q in quizzes)
+    lines.append("\n/previewquiz ID — معاينة | /searchquiz كلمة — بحث\n/deletequiz ID — حذف | /copyquiz ID — نسخ\n/renamequiz ID العنوان — تغيير الاسم\n/editquiz ID رقم_السؤال — تعديل سؤال\n/sharequiz ID — مشاركة | /reviewquiz ID — مراجعة")
     await update.effective_message.reply_text("\n".join(lines))
 
 
@@ -536,6 +841,7 @@ async def share_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await msg.reply_text("لم أجد اختبارًا بهذا الرقم في مكتبتك.")
         return
     group_drafts[chat.id] = {"quiz": saved, "owner_id": user.id}
+    save_group_draft(chat.id, user.id, saved)
     await msg.reply_text(
         f"تم تجهيز «{saved['title']}» ({len(saved['questions'])} سؤالًا) كمسودة امتحان. "
         "لم يبدأ بعد. اكتب /startquiz لبدئه أو /cancel لإلغائه."
@@ -557,8 +863,9 @@ async def start_shared_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await msg.reply_text("يوجد اختبار نشط بالفعل.")
         return
     group_drafts.pop(chat.id, None)
+    delete_group_draft(chat.id)
     saved = draft["quiz"]
-    await launch_quiz(context, chat.id, chat.type, draft["owner_id"], saved["questions"], 20, "exam", saved["id"])
+    await launch_quiz(context, chat.id, chat.type, draft["owner_id"], saved["questions"], int(saved.get("seconds", 20)), "exam", saved["id"])
 
 
 async def launch_saved_review(update: Update, context: ContextTypes.DEFAULT_TYPE, mode: str) -> None:
@@ -575,7 +882,7 @@ async def launch_saved_review(update: Update, context: ContextTypes.DEFAULT_TYPE
     if chat.id in sessions:
         await msg.reply_text("يوجد اختبار نشط في هذه المحادثة. أنهِه أولًا.")
         return
-    await launch_quiz(context, chat.id, chat.type, user.id, saved["questions"], 20, mode, saved["id"])
+    await launch_quiz(context, chat.id, chat.type, user.id, saved["questions"], int(saved.get("seconds", 20)), mode, saved["id"])
 
 
 async def review_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -634,12 +941,20 @@ def main() -> None:
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN environment variable is required")
     init_db()
+    group_drafts.update(get_group_drafts())
     start_health_server()
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler(["start", "help"], start))
     app.add_handler(CommandHandler("quiz", quiz))
     app.add_handler(CommandHandler("skip", skip_setup))
     app.add_handler(CommandHandler("library", show_library))
+    app.add_handler(CommandHandler("searchquiz", search_quizzes))
+    app.add_handler(CommandHandler("previewquiz", preview_quiz))
+    app.add_handler(CommandHandler("deletequiz", delete_quiz_command))
+    app.add_handler(CommandHandler("copyquiz", copy_saved_quiz))
+    app.add_handler(CommandHandler("renamequiz", rename_saved_quiz))
+    app.add_handler(CommandHandler("editquiz", edit_saved_question))
+    app.add_handler(CommandHandler("quizresults", show_quiz_results))
     app.add_handler(CommandHandler("sharequiz", share_quiz))
     app.add_handler(CommandHandler("startquiz", start_shared_quiz))
     app.add_handler(CommandHandler("reviewquiz", review_quiz))
@@ -650,10 +965,12 @@ def main() -> None:
     app.add_handler(CommandHandler("leaderboard", show_leaderboard))
     app.add_handler(CallbackQueryHandler(configure, pattern=r"^cfg:"))
     app.add_handler(CallbackQueryHandler(start_saved_private, pattern=r"^startprivate:"))
+    app.add_handler(CallbackQueryHandler(confirm_delete_quiz, pattern=r"^quizdelete:(confirm|cancel):"))
     app.add_handler(CallbackQueryHandler(poll_navigation, pattern=r"^poll(next|end):"))
     app.add_handler(CallbackQueryHandler(answer, pattern=r"^ans:"))
     app.add_handler(PollAnswerHandler(poll_answer))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, collect_setup_text))
+    app.add_handler(MessageHandler((filters.Document.ALL | filters.PHOTO) & ~filters.COMMAND, collect_setup_media))
     log.info("Starting Telegram quiz bot polling")
     app.run_polling(drop_pending_updates=False)
 
