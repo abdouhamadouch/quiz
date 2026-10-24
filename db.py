@@ -95,20 +95,6 @@ def init_db() -> None:
                 )
             """)
         # Upgrade databases created by earlier versions without losing saved quizzes.
-        for column, definition in (
-            ("seconds", "INTEGER NOT NULL DEFAULT 20"),
-            ("mode", "TEXT NOT NULL DEFAULT 'exam'"),
-            ("difficulty", "TEXT NOT NULL DEFAULT 'medium'"),
-            ("question_count", "INTEGER NOT NULL DEFAULT 5"),
-        ):
-            try:
-                conn.execute(f"ALTER TABLE saved_quizzes ADD COLUMN {column} {definition}")
-            except Exception as exc:
-                if "duplicate column" not in str(exc).lower() and "already exists" not in str(exc).lower():
-                    # PostgreSQL's duplicate-column error aborts the transaction, so
-                    # use IF NOT EXISTS there instead (handled in the branch below).
-                    if not _USE_POSTGRES:
-                        raise
         if _USE_POSTGRES:
             for column, definition in (
                 ("seconds", "INTEGER NOT NULL DEFAULT 20"),
@@ -117,6 +103,27 @@ def init_db() -> None:
                 ("question_count", "INTEGER NOT NULL DEFAULT 5"),
             ):
                 conn.execute(f"ALTER TABLE saved_quizzes ADD COLUMN IF NOT EXISTS {column} {definition}")
+        else:
+            for column, definition in (
+                ("seconds", "INTEGER NOT NULL DEFAULT 20"),
+                ("mode", "TEXT NOT NULL DEFAULT 'exam'"),
+                ("difficulty", "TEXT NOT NULL DEFAULT 'medium'"),
+                ("question_count", "INTEGER NOT NULL DEFAULT 5"),
+            ):
+                try:
+                    conn.execute(f"ALTER TABLE saved_quizzes ADD COLUMN {column} {definition}")
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc).lower():
+                        raise
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS quiz_results (
+                chat_id BIGINT NOT NULL, quiz_id BIGINT NOT NULL, user_id BIGINT NOT NULL,
+                name TEXT NOT NULL, points INTEGER NOT NULL DEFAULT 0, correct INTEGER NOT NULL DEFAULT 0,
+                answered INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(chat_id, quiz_id, user_id)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_quiz_results_chat_quiz ON quiz_results(chat_id, quiz_id, points DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_quizzes_owner ON saved_quizzes(owner_id, id DESC)")
         conn.commit()
 
@@ -254,3 +261,27 @@ def delete_group_draft(chat_id: int) -> None:
     with _lock, connect() as conn:
         conn.execute(_sql("DELETE FROM group_drafts WHERE chat_id=?"), (chat_id,))
         conn.commit()
+
+
+
+def save_quiz_results(chat_id: int, quiz_id: int, scores: dict[int, dict]) -> None:
+    if not scores:
+        return
+    with _lock, connect() as conn:
+        for user_id, item in scores.items():
+            conn.execute(_sql("""
+                INSERT INTO quiz_results(chat_id,quiz_id,user_id,name,points,correct,answered,created_at)
+                VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+                ON CONFLICT(chat_id,quiz_id,user_id) DO UPDATE SET
+                    name=excluded.name, points=excluded.points, correct=excluded.correct,
+                    answered=excluded.answered, created_at=CURRENT_TIMESTAMP
+            """), (chat_id, quiz_id, user_id, item["name"], item["points"], item["correct"], item["answered"]))
+        conn.commit()
+
+
+def quiz_leaderboard(chat_id: int, quiz_id: int, limit: int = 10) -> list[dict]:
+    with _lock, connect() as conn:
+        return _rows(conn.execute(_sql(
+            "SELECT user_id,name,points,correct,answered FROM quiz_results "
+            "WHERE chat_id=? AND quiz_id=? ORDER BY points DESC,correct DESC,answered ASC LIMIT ?"
+        ), (chat_id, quiz_id, limit)))
