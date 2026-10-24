@@ -1,76 +1,78 @@
 # Telegram Quiz Bot
 
-A Telegram bot for creating AI-generated quizzes from a lesson or a topic, reviewing via native Telegram quiz polls, and running timed competitive exams.
+Telegram bot for generating educational multiple-choice quizzes from lesson text, PDF/DOCX/TXT files, images, or a general topic. It supports private practice, group competitions, Telegram quiz polls, a personal library, and saved results.
 
 ## Features
 
-- `/quiz`: reply to a lesson message to use it as the source, or start a guided setup with an optional topic and source text.
-- Choose 5/10/15/20 questions, easy/medium/hard difficulty, question timer, and usage mode from inline buttons.
-- AI question generation with Groq/Gemini failover and JSON validation.
-- **Review one by one:** native Telegram quiz polls with correct-answer feedback; the creator or a group admin manually presses **السؤال التالي**.
-- **Publish all polls:** `/publishquiz ID` sends every saved quiz question as a native quiz poll at once.
-- **Competitive exam:** inline answers, per-question timer, 10 points for a correct answer, and final ranking in groups.
-- Personal saved quiz library: `/library`.
-- Share a saved quiz into a group as a draft using `/sharequiz ID`; it does not start immediately. A group admin or bot owner explicitly starts it with `/startquiz`.
-- Use saved quizzes for review with `/reviewquiz ID` or publish all their polls with `/publishquiz ID`.
-- `/end` or `/stop`: end the active session; `/cancel`: cancel an active session.
-- `/leaderboard` and `/reset` for saved scores.
-- SQLite persistence and a `/health` endpoint for Render.
+- AI question generation with Groq/Gemini failover; validates four distinct options, answer indexes, duplicate questions, and the requested question count.
+- Quiz settings: 5/10/15/20 questions, easy/medium/hard, 10–60 second timer, and competitive/manual-review/publish-all modes.
+- Source input: reply to text/caption or upload PDF, DOCX, TXT, or a clear image. PDF extraction supports text-based PDFs; scanned PDFs should be sent as images. Image text extraction uses Gemini and requires GEMINI_API_KEY.
+- Library management: /library, /searchquiz, /previewquiz, /deletequiz (confirmation and ownership check), /copyquiz, /renamequiz, and /editquiz.
+- /sharequiz ID creates a group draft. A group admin or bot owner must run /startquiz before a competition begins. Drafts are stored in the configured database and can survive a restart.
+- /reviewquiz ID advances through native quiz polls manually; /publishquiz ID publishes all polls at once.
+- Timed competitive exams award 10 points per correct answer, show final rankings, and save overall and per-quiz group results. Use /quizresults ID in the group.
+- /leaderboard, /reset, /end, /stop, and /cancel.
+- /health endpoint for Render health checks.
 
 ## Commands
 
-- `/quiz` — create a quiz. If replying to a text lesson, the lesson is used directly.
-- `/skip` — skip the current optional topic/source setup step.
-- `/library` — list the latest saved quizzes and their IDs.
-- `/sharequiz ID` — publish your saved quiz to a group as a waiting exam draft.
-- `/startquiz` — start the waiting group exam (bot owner/group admins only).
-- `/reviewquiz ID` — start manual, one-poll-at-a-time review.
-- `/publishquiz ID` — publish all saved quiz polls at once.
-- `/end`, `/stop` — end the active session.
-- `/cancel` — cancel the active session.
-- `/leaderboard` — show saved scores.
-- `/reset` — clear scores in the current chat (bot owner/group admins only).
+- /quiz — create a quiz from a reply, a topic, or lesson source.
+- /skip — skip an optional topic/source setup step.
+- /library — list your saved quizzes (private chat).
+- /searchquiz WORD — search saved quiz titles/source (private chat).
+- /previewquiz ID — inspect questions and answers (private chat).
+- /deletequiz ID — request deletion; confirm using the inline button (private chat).
+- /copyquiz ID — create an independent copy (private chat).
+- /renamequiz ID NEW_TITLE — rename a saved quiz (private chat).
+- /editquiz ID QUESTION_NUMBER — edit a question in private chat. Send lines in this order: question, four options, correct option number (1–4), then optional explanation.
+- /sharequiz ID — create a waiting group draft.
+- /startquiz — start the waiting group competition (owner/admin only).
+- /reviewquiz ID — start manual poll review.
+- /publishquiz ID — publish all saved quiz polls at once.
+- /quizresults ID — show results saved for that quiz in the current group.
+- /end, /stop — end an active session and save results.
+- /cancel — cancel an active session, or cancel a pending setup/edit.
+- /leaderboard — show the cumulative group leaderboard.
+- /reset — clear cumulative scores in the current chat (owner/admin only).
 
-## Required environment variables
+## Environment variables
 
-- `BOT_TOKEN`: token from BotFather.
-- `GROQ_API_KEY`: Groq API key.
-- `GEMINI_API_KEY`: Google Gemini API key.
-- `OWNER_IDS`: comma-separated Telegram numeric user IDs authorized to control the bot. Group administrators can start/stop group exams.
-- Optional model settings: `GROQ_MODEL`, `GEMINI_MODEL`.
-- `DATABASE_PATH`: SQLite path. Render Blueprint sets this to `data/quizbot.sqlite3`.
+Required:
+- BOT_TOKEN: Telegram token from BotFather.
+- GROQ_API_KEY and/or GEMINI_API_KEY: AI keys; Gemini is required for image OCR.
+- OWNER_IDS: comma-separated Telegram numeric IDs for bot owners.
+
+Optional:
+- GROQ_MODEL, GEMINI_MODEL.
+- DATABASE_URL: PostgreSQL URL for durable hosted storage.
+- DATABASE_PATH: SQLite path when DATABASE_URL is unset.
+- LOG_LEVEL.
 
 Never commit real tokens or API keys.
 
-## Deploy to Render
+## Persistence and Render
 
-1. Open the `abdouhamadouch/quiz` repository and confirm the files are on `main`.
-2. In Render choose **New → Blueprint**, then connect this repository.
-3. Add the real values for `BOT_TOKEN`, `GROQ_API_KEY`, `GEMINI_API_KEY`, and `OWNER_IDS`.
-4. Render installs `requirements.txt` and starts `python bot.py`.
-5. Verify `/health`, then send `/start` to the bot.
+SQLite remains the no-configuration default. Render's free filesystem is ephemeral, so quizzes and scores can be lost on restart/redeploy when using the default SQLite path. For durable hosted storage, configure DATABASE_URL to a PostgreSQL database. The app creates/upgrades its tables on startup.
 
-The Blueprint uses SQLite on the local filesystem. Render's free filesystem is ephemeral, so saved quizzes and scores may be lost on restart/redeploy unless a persistent disk or managed database is configured. Active sessions and waiting group drafts are in memory and do not survive process restarts.
+Saved quizzes, scores, per-quiz results, and waiting group drafts are stored in the database. Live in-progress timers and answer state are held in memory and cannot safely resume after a process restart; the bot should be ended and restarted after a restart.
 
-## Important behavior and limitations
+1. Connect this repository to Render using the Blueprint.
+2. Set BOT_TOKEN, OWNER_IDS, and the AI key(s).
+3. For persistence across deploys, set DATABASE_URL to a PostgreSQL connection URL. If it is unset, SQLite is used.
+4. Verify /health, then test /start and quiz creation in Telegram.
 
-- Telegram native quiz polls reveal correctness according to Telegram's poll UI. Telegram does not provide the bot with a reliable list of every group member, so the manual review mode intentionally advances only when its **السؤال التالي** button is pressed.
-- The publish-all mode sends all quiz polls at once and then ends the bot's active review session; it does not calculate competitive rankings.
-- Group exams wait for `/startquiz` after `/sharequiz ID`. Stop/end controls are restricted to the bot owner or group admins.
-- Text and text captions are supported as source material. OCR, voice transcription, PDF/DOCX import, and image-based question generation are not implemented yet.
-- AI-generated questions should be reviewed before use in high-stakes exams. Live testing with a real Telegram bot token and configured AI keys is still required.
+## Known limitations
+
+- PDF extraction reads embedded text; image-only/scanned PDFs are not OCRed as a whole document. Send individual pages as images instead.
+- DOCX text and table cells are supported. Image OCR is performed by Gemini and may misread low-resolution or handwritten text.
+- Native Telegram quiz polls show correctness according to Telegram's poll UI. Manual review intentionally advances only when the creator or an admin presses “السؤال التالي”.
+- Publish-all review is not a competition and does not calculate scores.
+- Live Telegram operation and real provider API calls must be tested with actual secrets before production use.
 
 ## Local run
 
-```bash
-python -m venv .venv
-# Windows: .venv\\Scripts\\activate
-# macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-python bot.py
-```
+Create a virtual environment, install requirements.txt, copy .env.example to .env, fill in real secrets, and run python bot.py.
 
 ## Automated checks
 
-GitHub Actions compiles the Python modules and runs unit tests on pushes and pull requests to `main`.
+GitHub Actions compiles Python files and runs the unit tests on pushes and pull requests to main.
