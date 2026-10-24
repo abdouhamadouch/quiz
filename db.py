@@ -60,7 +60,7 @@ def init_db() -> None:
                     source TEXT NOT NULL, questions_json TEXT NOT NULL,
                     seconds INTEGER NOT NULL DEFAULT 20, mode TEXT NOT NULL DEFAULT 'exam',
                     difficulty TEXT NOT NULL DEFAULT 'medium', question_count INTEGER NOT NULL DEFAULT 5,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    category TEXT NOT NULL DEFAULT 'عام', created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             conn.execute("""
@@ -101,6 +101,7 @@ def init_db() -> None:
                 ("mode", "TEXT NOT NULL DEFAULT 'exam'"),
                 ("difficulty", "TEXT NOT NULL DEFAULT 'medium'"),
                 ("question_count", "INTEGER NOT NULL DEFAULT 5"),
+                ("category", "TEXT NOT NULL DEFAULT 'عام'"),
             ):
                 conn.execute(f"ALTER TABLE saved_quizzes ADD COLUMN IF NOT EXISTS {column} {definition}")
         else:
@@ -159,14 +160,14 @@ def reset_chat(chat_id: int) -> None:
 
 
 def save_quiz(owner_id: int, title: str, source: str, questions: list[dict],
-              seconds: int = 20, mode: str = "exam", difficulty: str = "medium") -> int:
+              seconds: int = 20, mode: str = "exam", difficulty: str = "medium", category: str = "عام") -> int:
     with _lock, connect() as conn:
         cur = conn.execute(_sql(
-            "INSERT INTO saved_quizzes(owner_id,title,source,questions_json,seconds,mode,difficulty,question_count) "
-            "VALUES(?,?,?,?,?,?,?,?) RETURNING id"
+            "INSERT INTO saved_quizzes(owner_id,title,source,questions_json,seconds,mode,difficulty,question_count,category) "
+            "VALUES(?,?,?,?,?,?,?,?,?) RETURNING id"
         ), (owner_id, title[:120], source[:14000], json.dumps(questions, ensure_ascii=False),
             max(10, min(60, int(seconds))), mode if mode in {"exam", "review_manual", "review_all"} else "exam",
-            difficulty if difficulty in {"easy", "medium", "hard"} else "medium", len(questions)))
+            difficulty if difficulty in {"easy", "medium", "hard"} else "medium", len(questions), category.strip()[:80] or "عام"))
         row = cur.fetchone()
         conn.commit()
         return int(row["id"] if isinstance(row, dict) else row[0])
@@ -190,12 +191,12 @@ def list_quizzes(owner_id: int, limit: int = 20, search: str = "") -> list[dict]
         if search.strip():
             pattern = f"%{search.strip()[:100]}%"
             cursor = conn.execute(_sql(
-                "SELECT id,title,created_at,question_count FROM saved_quizzes "
-                "WHERE owner_id=? AND (title LIKE ? OR source LIKE ?) ORDER BY id DESC LIMIT ?"
-            ), (owner_id, pattern, pattern, limit))
+                "SELECT id,title,created_at,question_count,category FROM saved_quizzes "
+                "WHERE owner_id=? AND (title LIKE ? OR source LIKE ? OR category LIKE ?) ORDER BY id DESC LIMIT ?"
+            ), (owner_id, pattern, pattern, pattern, limit))
         else:
             cursor = conn.execute(_sql(
-                "SELECT id,title,created_at,question_count FROM saved_quizzes "
+                "SELECT id,title,created_at,question_count,category FROM saved_quizzes "
                 "WHERE owner_id=? ORDER BY id DESC LIMIT ?"
             ), (owner_id, limit))
         return _rows(cursor)
@@ -230,7 +231,7 @@ def copy_quiz(quiz_id: int, owner_id: int) -> int | None:
     if not saved:
         return None
     return save_quiz(owner_id, f"{saved['title']} (نسخة)", saved["source"], saved["questions"],
-                     saved.get("seconds", 20), saved.get("mode", "exam"), saved.get("difficulty", "medium"))
+                     saved.get("seconds", 20), saved.get("mode", "exam"), saved.get("difficulty", "medium"), saved.get("category", "عام"))
 
 
 def save_group_draft(chat_id: int, owner_id: int, quiz: dict) -> None:
@@ -285,3 +286,25 @@ def quiz_leaderboard(chat_id: int, quiz_id: int, limit: int = 10) -> list[dict]:
             "SELECT user_id,name,points,correct,answered FROM quiz_results "
             "WHERE chat_id=? AND quiz_id=? ORDER BY points DESC,correct DESC,answered ASC LIMIT ?"
         ), (chat_id, quiz_id, limit)))
+
+
+
+def set_quiz_category(quiz_id: int, owner_id: int, category: str) -> bool:
+    with _lock, connect() as conn:
+        cur = conn.execute(_sql("UPDATE saved_quizzes SET category=? WHERE id=? AND owner_id=?"),
+                           (category.strip()[:80] or "عام", quiz_id, owner_id))
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def user_stats(user_id: int) -> dict:
+    with _lock, connect() as conn:
+        score = conn.execute(_sql(
+            "SELECT COALESCE(SUM(points),0) AS points,COALESCE(SUM(correct),0) AS correct,"
+            "COALESCE(SUM(answered),0) AS answered,COUNT(*) AS groups_count FROM scores WHERE user_id=?"
+        ), (user_id,)).fetchone()
+        quizzes = conn.execute(_sql("SELECT COUNT(*) AS quiz_count FROM saved_quizzes WHERE owner_id=?"),
+                               (user_id,)).fetchone()
+        return {"points": int(score["points"]), "correct": int(score["correct"]),
+                "answered": int(score["answered"]), "groups_count": int(score["groups_count"]),
+                "quiz_count": int(quizzes["quiz_count"])}
