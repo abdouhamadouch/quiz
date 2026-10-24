@@ -117,11 +117,12 @@ def init_db() -> None:
                 except sqlite3.OperationalError as exc:
                     if "duplicate column" not in str(exc).lower():
                         raise
-        conn.execute("""
+        result_timestamp_type = "TIMESTAMPTZ" if _USE_POSTGRES else "TEXT"
+        conn.execute(f"""
             CREATE TABLE IF NOT EXISTS quiz_results (
                 chat_id BIGINT NOT NULL, quiz_id BIGINT NOT NULL, user_id BIGINT NOT NULL,
                 name TEXT NOT NULL, points INTEGER NOT NULL DEFAULT 0, correct INTEGER NOT NULL DEFAULT 0,
-                answered INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                answered INTEGER NOT NULL DEFAULT 0, created_at {result_timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY(chat_id, quiz_id, user_id)
             )
         """)
@@ -302,7 +303,8 @@ def user_stats(user_id: int) -> dict:
     with _lock, connect() as conn:
         score = conn.execute(_sql(
             "SELECT COALESCE(SUM(points),0) AS points,COALESCE(SUM(correct),0) AS correct,"
-            "COALESCE(SUM(answered),0) AS answered,COUNT(*) AS groups_count FROM scores WHERE user_id=?"
+            "COALESCE(SUM(answered),0) AS answered,COUNT(*) AS groups_count FROM scores "
+            "WHERE user_id=? AND chat_id<0"
         ), (user_id,)).fetchone()
         quizzes = conn.execute(_sql("SELECT COUNT(*) AS quiz_count FROM saved_quizzes WHERE owner_id=?"),
                                (user_id,)).fetchone()
