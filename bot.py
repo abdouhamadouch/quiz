@@ -79,6 +79,27 @@ def config_text(cfg: dict) -> str:
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg, chat, user = update.effective_message, update.effective_chat, update.effective_user
+    if msg and chat and user and context.args and context.args[0].startswith("share_") and group_chat(chat.type):
+        try:
+            _, quiz_raw, owner_raw = context.args[0].split("_", 2)
+            quiz_id, owner_id = int(quiz_raw), int(owner_raw)
+        except (ValueError, TypeError):
+            await msg.reply_text("رابط مشاركة الاختبار غير صالح.")
+            return
+        if owner_id != user.id:
+            await msg.reply_text("افتح رابط المشاركة من الحساب الذي أنشأ الاختبار.")
+            return
+        saved = get_quiz(quiz_id, owner_id)
+        if not saved:
+            await msg.reply_text("لم أجد هذا الاختبار في مكتبتك.")
+            return
+        group_drafts[chat.id] = {"quiz": saved, "owner_id": owner_id}
+        await msg.reply_text(
+            f"تم تجهيز «{saved['title']}» ({len(saved['questions'])} سؤالًا) كمسودة في هذه المجموعة. "
+            "لم يبدأ الامتحان بعد؛ على المالك أو أحد مشرفي المجموعة كتابة /startquiz."
+        )
+        return
     await update.effective_message.reply_text(
         "🎓 بوت الاختبارات التعليمية\n\n"
         "/quiz — إنشاء اختبار (يمكنك الرد على رسالة درس أو إدخال موضوع ومصدر)\n"
@@ -204,13 +225,48 @@ async def configure(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         title = cfg["topic"] or (source[:70].replace("\n", " ") if cfg["source"] else "اختبار عام")
         quiz_id = save_quiz(cfg["creator_id"], title, source, questions)
-        await query.message.reply_text(
-            f"حُفظ الاختبار في مكتبتك برقم #{quiz_id}، وعدد أسئلته {len(questions)}. المزود: {provider}."
-        )
-        await launch_quiz(context, cfg["chat_id"], cfg["chat_type"], cfg["creator_id"],
-                          questions, cfg["seconds"], cfg["mode"], quiz_id)
+        if cfg["chat_type"] == ChatType.PRIVATE:
+            bot = await context.bot.get_me()
+            share_url = f"https://t.me/{bot.username}?startgroup=share_{quiz_id}_{cfg['creator_id']}"
+            choice_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("ابدأ الاختبار في الخاص", callback_data=f"startprivate:{quiz_id}:{cfg['seconds']}:{cfg['mode']}")],
+                [InlineKeyboardButton("انشر الاختبار في مجموعة", url=share_url)],
+            ])
+            await query.message.reply_text(
+                f"حُفظ الاختبار في مكتبتك برقم #{quiz_id}، وعدد أسئلته {len(questions)}. المزود: {provider}.\n\nأين تريد استخدامه؟",
+                reply_markup=choice_keyboard,
+            )
+        else:
+            await query.message.reply_text(
+                f"حُفظ الاختبار في مكتبتك برقم #{quiz_id}، وعدد أسئلته {len(questions)}. المزود: {provider}."
+            )
+            await launch_quiz(context, cfg["chat_id"], cfg["chat_type"], cfg["creator_id"],
+                              questions, cfg["seconds"], cfg["mode"], quiz_id)
         return
     await query.edit_message_text(config_text(cfg), reply_markup=config_keyboard(cfg))
+
+
+async def start_saved_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or query.message is None or query.message.chat.type != ChatType.PRIVATE:
+        return
+    try:
+        _, quiz_raw, seconds_raw, mode = query.data.split(":", 3)
+        quiz_id, seconds = int(quiz_raw), int(seconds_raw)
+    except (ValueError, AttributeError):
+        await query.answer("اختيار غير صالح.", show_alert=True)
+        return
+    saved = get_quiz(quiz_id, query.from_user.id)
+    if not saved:
+        await query.answer("لم أجد الاختبار في مكتبتك.", show_alert=True)
+        return
+    if query.message.chat_id in sessions:
+        await query.answer("يوجد اختبار نشط بالفعل في الخاص.", show_alert=True)
+        return
+    await query.answer("بدء الاختبار")
+    await query.edit_message_reply_markup(reply_markup=None)
+    await launch_quiz(context, query.message.chat_id, ChatType.PRIVATE, query.from_user.id,
+                      saved["questions"], seconds, mode, quiz_id)
 
 
 async def launch_quiz(context: ContextTypes.DEFAULT_TYPE, chat_id: int, chat_type: str,
@@ -593,6 +649,7 @@ def main() -> None:
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("leaderboard", show_leaderboard))
     app.add_handler(CallbackQueryHandler(configure, pattern=r"^cfg:"))
+    app.add_handler(CallbackQueryHandler(start_saved_private, pattern=r"^startprivate:"))
     app.add_handler(CallbackQueryHandler(poll_navigation, pattern=r"^poll(next|end):"))
     app.add_handler(CallbackQueryHandler(answer, pattern=r"^ans:"))
     app.add_handler(PollAnswerHandler(poll_answer))
