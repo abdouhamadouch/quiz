@@ -83,6 +83,19 @@ def config_text(cfg: dict) -> str:
     )
 
 
+async def reply_lines_in_chunks(message, lines: list[str], limit: int = 3500) -> None:
+    chunk = ""
+    for line in lines:
+        candidate = f"{chunk}\n{line}" if chunk else line
+        if len(candidate) > limit and chunk:
+            await message.reply_text(chunk)
+            chunk = line
+        else:
+            chunk = candidate
+    if chunk:
+        await message.reply_text(chunk)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg, chat, user = update.effective_message, update.effective_chat, update.effective_user
     if msg and chat and user and context.args and context.args[0].startswith("share_") and group_chat(chat.type):
@@ -668,9 +681,9 @@ async def search_quizzes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not rows:
         await msg.reply_text("لم أعثر على اختبارات تطابق البحث.")
         return
-    await msg.reply_text("نتائج البحث:\n" + "\n".join(
+    await reply_lines_in_chunks(msg, ["نتائج البحث:"] + [
         f"#{row['id']} — {row['title']} [{row.get('category', 'عام')}] ({row['question_count']} سؤالًا)" for row in rows
-    ))
+    ])
 
 
 async def preview_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -892,8 +905,14 @@ async def show_library(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     lines = ["اختباراتك المحفوظة (الأحدث أولًا):"]
     lines.extend(f"#{q['id']} — {q['title']} [{q.get('category', 'عام')}] ({q['question_count']} سؤالًا)" for q in quizzes)
-    lines.append("\n/previewquiz ID — معاينة | /searchquiz كلمة — بحث\n/deletequiz ID — حذف | /copyquiz ID — نسخ\n/renamequiz ID العنوان — تغيير الاسم\n/editquiz ID رقم_السؤال — تعديل سؤال\n/setcategory ID تصنيف — تصنيف\n/sharequiz ID — مشاركة | /reviewquiz ID — مراجعة\n/stats — إحصائياتي")
-    await update.effective_message.reply_text("\n".join(lines))
+    lines.append("/previewquiz ID — معاينة | /searchquiz كلمة — بحث")
+    lines.append("/deletequiz ID — حذف | /copyquiz ID — نسخ")
+    lines.append("/renamequiz ID العنوان — تغيير الاسم")
+    lines.append("/editquiz ID رقم_السؤال — تعديل سؤال")
+    lines.append("/setcategory ID تصنيف — تصنيف")
+    lines.append("/sharequiz ID — مشاركة | /reviewquiz ID — مراجعة")
+    lines.append("/stats — إحصائياتي")
+    await reply_lines_in_chunks(update.effective_message, lines)
 
 
 async def share_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
