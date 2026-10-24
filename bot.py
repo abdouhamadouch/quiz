@@ -9,7 +9,7 @@ import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
 from telegram.constants import ChatType
 from telegram.ext import (
     Application, CallbackQueryHandler, CommandHandler, ContextTypes,
@@ -17,6 +17,7 @@ from telegram.ext import (
 )
 
 from ai_provider import extract_text_from_image, generate_questions, understand_user_request
+from quiz_export import format_quiz_export, format_session_report
 from db import (
     copy_quiz, delete_group_draft, delete_quiz as db_delete_quiz, get_group_drafts,
     get_quiz, init_db, leaderboard, list_quizzes, quiz_leaderboard, rename_quiz,
@@ -108,6 +109,23 @@ async def reply_lines_in_chunks(message, lines: list[str], limit: int = 3500) ->
         await message.reply_text(chunk)
 
 
+async def send_copyable_content(message, content: str, filename: str, caption: str) -> None:
+    """Send short exports as one text message and long exports as one TXT document."""
+    if len(content) <= 3900:
+        await message.reply_text(content)
+        return
+    buffer = io.BytesIO(content.encode('utf-8'))
+    await message.reply_document(document=InputFile(buffer, filename=filename), caption=caption[:900])
+
+
+async def send_report(context: ContextTypes.DEFAULT_TYPE, chat_id: int, content: str, filename: str) -> None:
+    """Send a complete result and answer-key report in one Telegram message."""
+    if len(content) <= 3900:
+        await context.bot.send_message(chat_id=chat_id, text=content)
+        return
+    buffer = io.BytesIO(content.encode('utf-8'))
+    await context.bot.send_document(chat_id=chat_id, document=InputFile(buffer, filename=filename), caption='التقرير الكامل للنسخ أو الطباعة.')
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg, chat, user = update.effective_message, update.effective_chat, update.effective_user
     if msg and chat and user and context.args and context.args[0].startswith("share_") and group_chat(chat.type):
@@ -150,6 +168,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/leaderboard — لوحة المتصدرين\n"
         "/searchquiz كلمة — البحث في المكتبة (في الخاص)\n"
         "/previewquiz ID — معاينة اختبار محفوظ\n"
+        "/exportquiz ID أو /printquiz ID — تصدير الأسئلة والإجابات للنسخ والطباعة\n"
         "/deletequiz ID — حذف بعد التأكيد\n"
         "/copyquiz ID — نسخ اختبار\n"
         "/renamequiz ID العنوان — تغيير العنوان\n"
@@ -452,6 +471,7 @@ async def launch_quiz(context: ContextTypes.DEFAULT_TYPE, chat_id: int, chat_typ
         "questions": questions, "seconds": seconds, "index": 0, "scores": {},
         "answered": set(), "message_id": None, "timer": None, "mode": mode,
         "poll_ids": [], "quiz_id": quiz_id,
+        "quiz_title": (get_quiz(quiz_id, creator_id) or {}).get("title", "اختبار") if quiz_id is not None else "اختبار",
     }
     sessions[chat_id] = session
     if mode == "review_all":
@@ -468,7 +488,8 @@ async def post_review_poll(context: ContextTypes.DEFAULT_TYPE, session: dict) ->
     questions = session["questions"]
     if index >= len(questions):
         sessions.pop(session["chat_id"], None)
-        await context.bot.send_message(session["chat_id"], "انتهت المراجعة بالاستفتاءات.")
+        report = format_session_report(session)
+        await send_report(context, session["chat_id"], report, f"quiz_review_{session.get('quiz_id') or session['chat_id']}.txt")
         return
     q = questions[index]
     poll = await context.bot.send_poll(
@@ -499,6 +520,8 @@ async def publish_all_polls(context: ContextTypes.DEFAULT_TYPE, session: dict) -
             log.exception("Could not publish poll %s", index + 1)
     sessions.pop(chat_id, None)
     await context.bot.send_message(chat_id, f"تم نشر {len(session['poll_ids'])} استفتاءات دفعة واحدة. تظهر الإجابة الصحيحة بعد تصويت كل مشارك.")
+    report = format_session_report(session)
+    await send_report(context, chat_id, report, f"quiz_review_{session.get('quiz_id') or chat_id}.txt")
 
 
 async def poll_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -638,7 +661,11 @@ async def finish(context: ContextTypes.DEFAULT_TYPE, chat_id: int, cancelled: bo
     if timer and timer is not asyncio.current_task():
         timer.cancel()
     if session.get("mode", "exam") != "exam":
-        await context.bot.send_message(chat_id, "أُنهيت جلسة الاستفتاءات." if cancelled else "انتهت جلسة الاستفتاءات.")
+        if cancelled:
+            await context.bot.send_message(chat_id, "أُلغيَت جلسة المراجعة.")
+            return
+        report = format_session_report(session)
+        await send_report(context, chat_id, report, f"quiz_review_{session.get('quiz_id') or chat_id}.txt")
         return
     if cancelled:
         await context.bot.send_message(chat_id, "أُلغي الامتحان ولم تُحفظ نقاط هذه الجلسة.")
@@ -646,14 +673,8 @@ async def finish(context: ContextTypes.DEFAULT_TYPE, chat_id: int, cancelled: bo
     save_session_scores(chat_id, session["scores"])
     if session.get("quiz_id") is not None:
         save_quiz_results(chat_id, int(session["quiz_id"]), session["scores"])
-    participants = sorted(session["scores"].values(), key=lambda x: (x["points"], x["correct"]), reverse=True)
-    lines = ["النتائج النهائية", f"عدد الأسئلة: {len(session['questions'])}"]
-    if not participants:
-        lines.append("لم تُسجّل أي إجابات.")
-    else:
-        for i, row in enumerate(participants[:10], 1):
-            lines.append(f"{i}. {row['name']} — {row['points']} نقطة ({row['correct']}/{row['answered']} صحيحة)")
-    await context.bot.send_message(chat_id, "\n".join(lines))
+    report = format_session_report(session)
+    await send_report(context, chat_id, report, f"quiz_results_{session.get('quiz_id') or chat_id}.txt")
 
 
 async def end_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -742,6 +763,24 @@ async def preview_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/renamequiz ID العنوان — تغيير الاسم\n/copyquiz ID — إنشاء نسخة\n/deletequiz ID — حذف بعد التأكيد"
     )
 
+
+async def export_quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user, msg, chat = update.effective_user, update.effective_message, update.effective_chat
+    if not user or not msg or not chat:
+        return
+    if chat.type != ChatType.PRIVATE:
+        await msg.reply_text("تصدير الاختبار متاح في الخاص لحماية مكتبتك.")
+        return
+    if not context.args or not context.args[0].isdigit():
+        await msg.reply_text("الصيغة: /exportquiz ID أو /printquiz ID")
+        return
+    quiz_id = int(context.args[0])
+    saved = get_quiz(quiz_id, user.id)
+    if not saved:
+        await msg.reply_text("لم أجد هذا الاختبار في مكتبتك.")
+        return
+    content = format_quiz_export(saved)
+    await send_copyable_content(msg, content, f'quiz_{quiz_id}_print.txt', 'نسخة نصية كاملة من الاختبار للنسخ أو الطباعة.')
 
 async def delete_quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user, msg, chat = update.effective_user, update.effective_message, update.effective_chat
@@ -1294,6 +1333,7 @@ def main() -> None:
     app.add_handler(CommandHandler("library", show_library))
     app.add_handler(CommandHandler("searchquiz", search_quizzes))
     app.add_handler(CommandHandler("previewquiz", preview_quiz))
+    app.add_handler(CommandHandler(["exportquiz", "printquiz"], export_quiz_command))
     app.add_handler(CommandHandler("deletequiz", delete_quiz_command))
     app.add_handler(CommandHandler("copyquiz", copy_saved_quiz))
     app.add_handler(CommandHandler("renamequiz", rename_saved_quiz))
