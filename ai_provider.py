@@ -78,7 +78,7 @@ def _user_prompt(source: str, count: int, topic: str, difficulty: str) -> str:
     return (
         f"Create {count} questions. {source_rule}\n"
         f"Difficulty: {levels.get(difficulty, levels['medium'])}\n{topic_line}"
-        "Make every question answerable from the source and keep explanations concise.\n\n"
+        "Make every question answerable from the source material or the requested general topic, and keep explanations concise.\n\n"
         f"SOURCE:\n{source[:14000]}"
     )
 
