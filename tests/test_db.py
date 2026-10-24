@@ -75,6 +75,12 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(stats["points"], 10)
         self.assertEqual(stats["correct"], 1)
         self.assertEqual(stats["answered"], 1)
+        db.save_session_scores(101, {
+            101: {"name": "Private learner", "points": 50, "correct": 5, "answered": 5}
+        })
+        stats = db.user_stats(101)
+        self.assertEqual(stats["points"], 10)
+        self.assertEqual(stats["groups_count"], 1)
 
     def test_init_is_safe_to_run_more_than_once(self):
         db.init_db()
