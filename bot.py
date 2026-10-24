@@ -21,7 +21,7 @@ from db import (
     copy_quiz, delete_group_draft, delete_quiz as db_delete_quiz, get_group_drafts,
     get_quiz, init_db, leaderboard, list_quizzes, quiz_leaderboard, rename_quiz,
     reset_chat, save_group_draft, save_quiz, save_quiz_results, save_session_scores,
-    update_quiz_questions,
+    set_quiz_category, update_quiz_questions, user_stats,
 )
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -123,7 +123,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/copyquiz ID — نسخ اختبار\n"
         "/renamequiz ID العنوان — تغيير العنوان\n"
         "/editquiz ID رقم_السؤال — تعديل سؤال\n"
-        "/quizresults ID — نتائج اختبار المجموعة"
+        "/quizresults ID — نتائج اختبار المجموعة\n"
+        "/setcategory ID تصنيف — تصنيف الاختبار\n"
+        "/stats — إحصائياتك الشخصية"
     )
 
 
@@ -344,7 +346,7 @@ async def configure(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await query.message.reply_text("تعذّر إنشاء الأسئلة. تحقق من مفاتيح Groq وGemini ثم حاول مجددًا.")
             return
         title = cfg["topic"] or (source[:70].replace("\n", " ") if cfg["source"] else "اختبار عام")
-        quiz_id = save_quiz(cfg["creator_id"], title, source, questions, cfg["seconds"], cfg["mode"], cfg["difficulty"])
+        quiz_id = save_quiz(cfg["creator_id"], title, source, questions, cfg["seconds"], cfg["mode"], cfg["difficulty"], cfg["topic"] or "عام")
         if cfg["chat_type"] == ChatType.PRIVATE:
             bot = await context.bot.get_me()
             share_url = f"https://t.me/{bot.username}?startgroup=share_{quiz_id}_{cfg['creator_id']}"
@@ -648,7 +650,7 @@ async def search_quizzes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await msg.reply_text("لم أعثر على اختبارات تطابق البحث.")
         return
     await msg.reply_text("نتائج البحث:\n" + "\n".join(
-        f"#{row['id']} — {row['title']} ({row['question_count']} سؤالًا)" for row in rows
+        f"#{row['id']} — {row['title']} [{row.get('category', 'عام')}] ({row['question_count']} سؤالًا)" for row in rows
     ))
 
 
@@ -822,6 +824,42 @@ async def show_quiz_results(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     ))
 
 
+async def set_quiz_category_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user, msg, chat = update.effective_user, update.effective_message, update.effective_chat
+    if not user or not msg or not chat:
+        return
+    if chat.type != ChatType.PRIVATE:
+        await msg.reply_text("تصنيف المكتبة متاح في الخاص فقط.")
+        return
+    if len(context.args) < 2 or not context.args[0].isdigit():
+        await msg.reply_text("الصيغة: /setcategory ID التصنيف")
+        return
+    quiz_id, category = int(context.args[0]), " ".join(context.args[1:])
+    if set_quiz_category(quiz_id, user.id, category):
+        await msg.reply_text(f"تم تعيين تصنيف «{category[:80]}» للاختبار #{quiz_id}.")
+    else:
+        await msg.reply_text("لم أجد الاختبار في مكتبتك.")
+
+
+async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user, msg, chat = update.effective_user, update.effective_message, update.effective_chat
+    if not user or not msg or not chat:
+        return
+    if chat.type != ChatType.PRIVATE:
+        await msg.reply_text("افتح البوت في الخاص لعرض إحصائياتك.")
+        return
+    stats = user_stats(user.id)
+    accuracy = round(100 * stats["correct"] / stats["answered"]) if stats["answered"] else 0
+    await msg.reply_text(
+        "إحصائياتك الشخصية\n"
+        f"الاختبارات المحفوظة: {stats['quiz_count']}\n"
+        f"المجموعات التي شاركت فيها: {stats['groups_count']}\n"
+        f"مجموع النقاط: {stats['points']}\n"
+        f"الإجابات الصحيحة: {stats['correct']} من {stats['answered']}\n"
+        f"نسبة الإجابات الصحيحة: {accuracy}%"
+    )
+
+
 async def show_library(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user:
@@ -834,7 +872,7 @@ async def show_library(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.effective_message.reply_text("مكتبتك فارغة. أنشئ اختبارًا باستخدام /quiz.")
         return
     lines = ["اختباراتك المحفوظة (الأحدث أولًا):"]
-    lines.extend(f"#{q['id']} — {q['title']} ({q['question_count']} سؤالًا)" for q in quizzes)
+    lines.extend(f"#{q['id']} — {q['title']} [{q.get('category', 'عام')}] ({q['question_count']} سؤالًا)" for q in quizzes)
     lines.append("\n/previewquiz ID — معاينة | /searchquiz كلمة — بحث\n/deletequiz ID — حذف | /copyquiz ID — نسخ\n/renamequiz ID العنوان — تغيير الاسم\n/editquiz ID رقم_السؤال — تعديل سؤال\n/sharequiz ID — مشاركة | /reviewquiz ID — مراجعة")
     await update.effective_message.reply_text("\n".join(lines))
 
@@ -967,6 +1005,8 @@ def main() -> None:
     app.add_handler(CommandHandler("renamequiz", rename_saved_quiz))
     app.add_handler(CommandHandler("editquiz", edit_saved_question))
     app.add_handler(CommandHandler("quizresults", show_quiz_results))
+    app.add_handler(CommandHandler("setcategory", set_quiz_category_command))
+    app.add_handler(CommandHandler("stats", show_stats))
     app.add_handler(CommandHandler("sharequiz", share_quiz))
     app.add_handler(CommandHandler("startquiz", start_shared_quiz))
     app.add_handler(CommandHandler("reviewquiz", review_quiz))
@@ -981,6 +1021,10 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(poll_navigation, pattern=r"^poll(next|end):"))
     app.add_handler(CallbackQueryHandler(answer, pattern=r"^ans:"))
     app.add_handler(PollAnswerHandler(poll_answer))
+    app.add_handler(MessageHandler(filters.Regex(r"^(اختبار|أنشئ اختبار|انشئ اختبار)$"), quiz))
+    app.add_handler(MessageHandler(filters.Regex(r"^(مكتبتي|اختباراتي)$"), show_library))
+    app.add_handler(MessageHandler(filters.Regex(r"^(المتصدرون|لوحة المتصدرين)$"), show_leaderboard))
+    app.add_handler(MessageHandler(filters.Regex(r"^(إحصائياتي|احصائياتي)$"), show_stats))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, collect_setup_text))
     app.add_handler(MessageHandler((filters.Document.ALL | filters.PHOTO) & ~filters.COMMAND, collect_setup_media))
     log.info("Starting Telegram quiz bot polling")
