@@ -52,7 +52,7 @@ def validate_questions(data: dict[str, Any], count: int) -> list[dict[str, Any]]
         if not question or not isinstance(options, list) or len(options) != 4 or isinstance(item.get("answer"), bool) or answer not in range(4):
             continue
         options = [str(x).strip() for x in options]
-        if any(not x for x in options) or len({re.sub(r"\\s+", " ", x).casefold() for x in options}) != 4:
+        if any(not x for x in options) or len({re.sub(r"\s+", " ", x).casefold() for x in options}) != 4:
             continue
         key = question.casefold()
         if key in seen:
