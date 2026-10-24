@@ -1027,10 +1027,10 @@ async def assistant_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await msg.reply_text("المحادثة الذكية وإدارة المكتبة متاحتان في الخاص لحماية خصوصية اختباراتك.")
         return
     await msg.reply_text(
-        "يمكنك التحدث معي مباشرة بلغة طبيعية، بالعربية أو الدارجة أو الإنجليزية. أمثلة:\\n"
-        "• كيف أنشئ اختبارًا؟\\n• ابحث عن اختبار القواعد الذي حفظته.\\n"
-        "• أريد لعب اختبار المفردات.\\n• احذف الاختبار القديم.\\n"
-        "• اشرح لي كيف تعمل مشاركة الاختبارات.\\n\\n"
+        "يمكنك التحدث معي مباشرة بلغة طبيعية، بالعربية أو الدارجة أو الإنجليزية. أمثلة:\n"
+        "• كيف أنشئ اختبارًا؟\n• ابحث عن اختبار القواعد الذي حفظته.\n"
+        "• أريد لعب اختبار المفردات.\n• احذف الاختبار القديم.\n"
+        "• اشرح لي كيف تعمل مشاركة الاختبارات.\n\n"
         "سأعرض الاختبارات التي أجدها، وأطلب تأكيدك قبل الحذف. اكتب طلبك في رسالة عادية."
     )
 
@@ -1077,6 +1077,18 @@ async def assistant_message(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     if chat.type != ChatType.PRIVATE:
         return
+    pending_rename_id = context.user_data.pop("assistant_pending_rename", None)
+    if pending_rename_id:
+        new_title = msg.text.strip()
+        if not new_title or len(new_title) > 120:
+            context.user_data["assistant_pending_rename"] = pending_rename_id
+            await msg.reply_text("أرسل عنوانًا غير فارغ لا يتجاوز 120 حرفًا، أو /cancel للإلغاء.")
+            return
+        if rename_quiz(int(pending_rename_id), user.id, new_title):
+            await msg.reply_text(f"تم تغيير عنوان الاختبار إلى «{new_title}».")
+        else:
+            await msg.reply_text("لم أجد الاختبار في مكتبتك، لذلك لم يتغير العنوان.")
+        return
     history = context.user_data.setdefault("assistant_history", [])
     try:
         intent = await asyncio.to_thread(understand_user_request, msg.text, history[-6:])
@@ -1098,10 +1110,10 @@ async def assistant_message(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         stats = user_stats(user.id)
         accuracy = round(100 * stats["correct"] / stats["answered"]) if stats["answered"] else 0
         reply = (
-            "إحصائياتك الشخصية\\n"
-            f"الاختبارات المحفوظة: {stats['quiz_count']}\\n"
-            f"المجموعات التي شاركت فيها: {stats['groups_count']}\\n"
-            f"مجموع النقاط: {stats['points']}\\n"
+            "إحصائياتك الشخصية\n"
+            f"الاختبارات المحفوظة: {stats['quiz_count']}\n"
+            f"المجموعات التي شاركت فيها: {stats['groups_count']}\n"
+            f"مجموع النقاط: {stats['points']}\n"
             f"الإجابات الصحيحة: {stats['correct']} من {stats['answered']} ({accuracy}%)"
         )
         await msg.reply_text(reply)
@@ -1306,7 +1318,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.Regex(r"^(مكتبتي|اختباراتي)$"), show_library))
     app.add_handler(MessageHandler(filters.Regex(r"^(المتصدرون|لوحة المتصدرين)$"), show_leaderboard))
     app.add_handler(MessageHandler(filters.Regex(r"^(إحصائياتي|احصائياتي)$"), show_stats))
-    app.add_handler(CallbackQueryHandler(assistant_action_callback, pattern=r"^assistant:(delete:\\d+|list|create)$"))
+    app.add_handler(CallbackQueryHandler(assistant_action_callback, pattern=r"^assistant:(delete:\d+|list|create)$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, assistant_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, collect_setup_text))
     app.add_handler(MessageHandler((filters.Document.ALL | filters.PHOTO) & ~filters.COMMAND, collect_setup_media))
