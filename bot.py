@@ -42,6 +42,9 @@ async def authorized(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool
         return False
     if user.id in OWNER_IDS:
         return True
+    # A user controls their own private chat and private quiz session.
+    if chat.type == ChatType.PRIVATE:
+        return True
     if not group_chat(chat.type):
         return False
     try:
@@ -437,10 +440,16 @@ async def cancel_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not await authorized(update, context):
         await update.effective_message.reply_text("هذا الأمر متاح للمالك أو مشرفي المجموعة فقط.")
         return
-    if update.effective_chat.id not in sessions:
-        await update.effective_message.reply_text("لا يوجد اختبار نشط.")
+    chat_id = update.effective_chat.id
+    if chat_id not in sessions:
+        if chat_id in group_drafts:
+            group_drafts.pop(chat_id, None)
+            await update.effective_message.reply_text("تم إلغاء مسودة الامتحان المنشورة.")
+        else:
+            pending_setup.pop((chat_id, update.effective_user.id), None)
+            await update.effective_message.reply_text("لا يوجد اختبار نشط؛ أُلغي أي إعداد شخصي قيد الانتظار.")
         return
-    await finish(context, update.effective_chat.id, cancelled=True)
+    await finish(context, chat_id, cancelled=True)
 
 
 async def show_library(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
