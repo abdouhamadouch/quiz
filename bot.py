@@ -1180,6 +1180,50 @@ async def assistant_message(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         history.append({"role": "assistant", "content": "بدأ إعداد اختبار جديد."})
         context.user_data["assistant_history"] = history[-8:]
         return
+    if action in {"copy_quiz", "preview_quiz"}:
+        rows = _assistant_quiz_rows(user.id, intent)
+        if len(rows) != 1:
+            action_word = "نسخه" if action == "copy_quiz" else "عرض أسئلته"
+            await msg.reply_text(
+                f"حدّد اختبارًا واحدًا باسمه أو رقمه حتى أستطيع {action_word}.",
+                reply_markup=_assistant_result_keyboard(rows) if rows else None,
+            )
+            return
+        quiz_id = int(rows[0]["id"])
+        if action == "copy_quiz":
+            new_id = copy_quiz(quiz_id, user.id)
+            if new_id is None:
+                await msg.reply_text("لم أتمكن من نسخ الاختبار؛ تحقق من وجوده في مكتبتك.")
+            else:
+                await msg.reply_text(
+                    f"تم إنشاء نسخة مستقلة من «{rows[0]['title']}» برقم #{new_id}."
+                )
+            return
+        saved = get_quiz(quiz_id, user.id)
+        if not saved:
+            await msg.reply_text("لم أجد هذا الاختبار في مكتبتك.")
+            return
+        questions = saved.get("questions", [])
+        lines = [
+            f"معاينة الاختبار #{quiz_id}: {saved['title']}",
+            f"عدد الأسئلة: {len(questions)}",
+            "",
+        ]
+        for index, question in enumerate(questions[:5], 1):
+            lines.append(f"{index}. {question.get('question', '')}")
+            for option_index, option in enumerate(question.get("options", [])):
+                prefix = "✓" if option_index == question.get("answer") else "•"
+                lines.append(f"  {prefix} {option}")
+            explanation = question.get("explanation", "").strip()
+            if explanation:
+                lines.append(f"التفسير: {explanation}")
+            lines.append("")
+        if len(questions) > 5:
+            lines.append(f"تُعرض أول 5 أسئلة فقط من أصل {len(questions)}. استخدم /previewquiz {quiz_id} لعرض المعاينة الكاملة.")
+        await reply_lines_in_chunks(msg, lines)
+        history.append({"role": "assistant", "content": f"عرضت معاينة الاختبار #{quiz_id}."})
+        context.user_data["assistant_history"] = history[-8:]
+        return
     if action == "rename_quiz":
         title = intent.get("title", "").strip()
         rows = _assistant_quiz_rows(user.id, intent)
