@@ -35,6 +35,10 @@ class QuestionValidationTests(unittest.TestCase):
         data = {"questions": [question(answer=True)]}
         self.assertEqual(validate_questions(data, 1), [])
 
+    def test_fractional_answer_index_is_rejected(self):
+        data = {"questions": [question(answer=1.5)]}
+        self.assertEqual(validate_questions(data, 1), [])
+
     def test_duplicate_questions_are_removed(self):
         data = {"questions": [question("Same?"), question(" same? ")]}
         self.assertEqual(len(validate_questions(data, 5)), 1)
