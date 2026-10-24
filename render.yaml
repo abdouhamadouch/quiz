@@ -19,6 +19,8 @@ services:
         value: llama-3.3-70b-versatile
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
+      - key: DATABASE_URL
+        sync: false
       - key: DATABASE_PATH
         value: data/quizbot.sqlite3
       - key: LOG_LEVEL
