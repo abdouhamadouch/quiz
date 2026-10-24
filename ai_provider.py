@@ -145,7 +145,7 @@ def generate_questions(
                 _preferred = "gemini" if name == "groq" else "groq"
             return questions, name.upper()
         except Exception as exc:
-            errors.append(f"{name}: {type(exc).__name__}: {exc}")
+            errors.append(f"{name}: {type(exc).__name__}")
     raise RuntimeError("Both AI providers failed. " + " | ".join(errors))
 
 
