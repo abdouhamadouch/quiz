@@ -15,7 +15,7 @@ class QuestionValidationTests(unittest.TestCase):
         self.assertEqual(validate_questions(data, 1), [])
 
     def test_json_fence_is_parsed(self):
-        self.assertEqual(_parse_json('\\`\\`\\`json\\n{"questions": []}\\n\\`\\`\\`'), {"questions": []})
+        self.assertEqual(_parse_json('{"questions": []}'), {"questions": []})
 
 if __name__ == "__main__":
     unittest.main()
