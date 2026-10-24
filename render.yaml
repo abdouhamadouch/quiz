@@ -6,10 +6,6 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
     healthCheckPath: /health
-    disk:
-      name: quizbot-data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: BOT_TOKEN
         sync: false
@@ -24,6 +20,6 @@ services:
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
       - key: DATABASE_PATH
-        value: /var/data/quizbot.sqlite3
+        value: data/quizbot.sqlite3
       - key: LOG_LEVEL
         value: INFO
