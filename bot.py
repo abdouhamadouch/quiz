@@ -797,7 +797,7 @@ async def edit_saved_question(update: Update, context: ContextTypes.DEFAULT_TYPE
     q = saved["questions"][number - 1]
     await msg.reply_text(
         f"تعديل السؤال {number} في الاختبار #{quiz_id}.\n"
-        "أرسل 7 أسطر على الأقل بهذا الترتيب:\n"
+        "أرسل 6 أسطر بهذا الترتيب، ويمكن إضافة التفسير كسطر سابع:\n"
         "1) نص السؤال\n2) الخيار الأول\n3) الخيار الثاني\n4) الخيار الثالث\n5) الخيار الرابع\n"
         "6) رقم الإجابة الصحيحة من 1 إلى 4\n7) التفسير (اختياري، ويمكن تركه فارغًا)\n\n"
         f"السؤال الحالي: {q['question']}\nأرسل /cancel لإلغاء التعديل."
@@ -873,7 +873,7 @@ async def show_library(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     lines = ["اختباراتك المحفوظة (الأحدث أولًا):"]
     lines.extend(f"#{q['id']} — {q['title']} [{q.get('category', 'عام')}] ({q['question_count']} سؤالًا)" for q in quizzes)
-    lines.append("\n/previewquiz ID — معاينة | /searchquiz كلمة — بحث\n/deletequiz ID — حذف | /copyquiz ID — نسخ\n/renamequiz ID العنوان — تغيير الاسم\n/editquiz ID رقم_السؤال — تعديل سؤال\n/sharequiz ID — مشاركة | /reviewquiz ID — مراجعة")
+    lines.append("\n/previewquiz ID — معاينة | /searchquiz كلمة — بحث\n/deletequiz ID — حذف | /copyquiz ID — نسخ\n/renamequiz ID العنوان — تغيير الاسم\n/editquiz ID رقم_السؤال — تعديل سؤال\n/setcategory ID تصنيف — تصنيف\n/sharequiz ID — مشاركة | /reviewquiz ID — مراجعة\n/stats — إحصائياتي")
     await update.effective_message.reply_text("\n".join(lines))
 
 
