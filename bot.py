@@ -198,7 +198,7 @@ async def collect_setup_media(update: Update, context: ContextTypes.DEFAULT_TYPE
         await msg.reply_text(f"تعذّر قراءة الملف: {str(exc)[:250]}")
         return
     except Exception:
-        log.exception("Source file extraction failed")
+        log.error("Source file extraction failed: %s", type(exc).__name__)
         await msg.reply_text("تعذّر قراءة الملف. تحقق من نوعه وحجمه، ومن إعداد مفتاح Gemini إذا كان المصدر صورة.")
         return
     cfg.pop("stage", None)
@@ -221,7 +221,7 @@ async def quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await msg.reply_text(f"تعذّر قراءة المصدر: {str(exc)[:250]}\nأرسل نصًا أو ملف PDF/DOCX أو صورة واضحة.")
             return
         except Exception:
-            log.exception("Replied source extraction failed")
+            log.error("Replied source extraction failed: %s", type(exc).__name__)
             await msg.reply_text("تعذّر قراءة المصدر. تحقق من الملف ومفتاح Gemini إذا كان المصدر صورة.")
             return
     cfg = {
