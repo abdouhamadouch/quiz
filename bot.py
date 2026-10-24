@@ -116,7 +116,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/publishquiz ID — نشر جميع الاستفتاءات دفعة واحدة\n"
         "/end أو /stop — إنهاء الاختبار النشط\n"
         "/cancel — إلغاء الاختبار النشط\n"
-        "/leaderboard — لوحة المتصدرين"
+        "/leaderboard — لوحة المتصدرين\n"
+        "/searchquiz كلمة — البحث في المكتبة (في الخاص)\n"
+        "/previewquiz ID — معاينة اختبار محفوظ\n"
+        "/deletequiz ID — حذف بعد التأكيد\n"
+        "/copyquiz ID — نسخ اختبار\n"
+        "/renamequiz ID العنوان — تغيير العنوان\n"
+        "/editquiz ID رقم_السؤال — تعديل سؤال\n"
+        "/quizresults ID — نتائج اختبار المجموعة"
     )
 
 
@@ -615,7 +622,8 @@ async def cancel_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await update.effective_message.reply_text("تم إلغاء مسودة الامتحان المنشورة.")
         else:
             pending_setup.pop((chat_id, update.effective_user.id), None)
-            await update.effective_message.reply_text("لا يوجد اختبار نشط؛ أُلغي أي إعداد شخصي قيد الانتظار.")
+            pending_question_edits.pop((chat_id, update.effective_user.id), None)
+            await update.effective_message.reply_text("أُلغي أي إعداد أو تعديل شخصي قيد الانتظار.")
         return
     await finish(context, chat_id, cancelled=True)
 
