@@ -309,14 +309,15 @@ async def configure(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query:
         return
-    await query.answer()
     parts = query.data.split(":")
     if len(parts) < 2:
+        await query.answer("طلب غير صالح.", show_alert=True)
         return
     action = parts[1]
     key = next((k for k, v in pending_setup.items()
                 if v.get("config_message_id") == query.message.message_id and k[0] == query.message.chat_id), None)
     if not key:
+        await query.answer("انتهت جلسة الإعداد.", show_alert=True)
         await query.edit_message_text("انتهت جلسة الإعداد. أرسل /quiz للبدء من جديد.")
         return
     cfg = pending_setup[key]
@@ -326,6 +327,7 @@ async def configure(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if group_chat(query.message.chat.type) and action == "generate" and not await authorized(update, context):
         await query.answer("إنشاء الاختبار الجماعي متاح للمالك أو مشرفي المجموعة فقط.", show_alert=True)
         return
+    await query.answer()
     if action == "cancel":
         pending_setup.pop(key, None)
         await query.edit_message_text("تم إلغاء إعداد الاختبار.")
