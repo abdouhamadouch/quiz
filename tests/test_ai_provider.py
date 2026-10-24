@@ -40,7 +40,7 @@ class QuestionValidationTests(unittest.TestCase):
         self.assertEqual(len(validate_questions(data, 5)), 1)
 
     def test_json_fence_is_parsed(self):
-        self.assertEqual(_parse_json('\\`\\`\\`json\\n{"questions": []}\\n\\`\\`\\`'), {"questions": []})
+        self.assertEqual(_parse_json('```json\n{"questions": []}\n```'), {"questions": []})
 
     def test_provider_failover_when_first_provider_returns_too_few(self):
         ai_provider._preferred = "groq"
