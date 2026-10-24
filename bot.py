@@ -545,6 +545,8 @@ async def poll_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if action == "pollend":
         sessions.pop(chat_id, None)
         await query.edit_message_text("تم إنهاء المراجعة.")
+        report = format_session_report(session)
+        await send_report(context, chat_id, report, f"quiz_review_{session.get('quiz_id') or chat_id}.txt")
         return
     if session["poll_ids"]:
         try:
