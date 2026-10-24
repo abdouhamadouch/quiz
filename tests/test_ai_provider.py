@@ -62,6 +62,28 @@ class QuestionValidationTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 generate_questions("source", 2)
 
+    def test_assistant_intent_is_normalized(self):
+        from ai_provider import normalize_assistant_intent
+        result = normalize_assistant_intent({
+            "intent": "DELETE_QUIZ", "query": "  grammar  ", "quiz_id": 12,
+            "title": " New title ", "reply": "ok", "unknown": "ignored"
+        })
+        self.assertEqual(result["intent"], "delete_quiz")
+        self.assertEqual(result["query"], "grammar")
+        self.assertEqual(result["quiz_id"], 12)
+        self.assertEqual(result["title"], "New title")
+        self.assertNotIn("unknown", result)
+
+    def test_invalid_assistant_intent_is_safe_chat(self):
+        from ai_provider import normalize_assistant_intent
+        result = normalize_assistant_intent({"intent": "run_shell", "quiz_id": "1; DROP TABLE"})
+        self.assertEqual(result["intent"], "chat")
+        self.assertIsNone(result["quiz_id"])
+
+    def test_fractional_assistant_quiz_id_is_rejected(self):
+        from ai_provider import normalize_assistant_intent
+        self.assertIsNone(normalize_assistant_intent({"intent": "play_quiz", "quiz_id": 1.5})["quiz_id"])
+
     def test_provider_error_details_are_not_exposed(self):
         ai_provider._preferred = "groq"
         with patch("ai_provider._groq", side_effect=RuntimeError("secret=TEST_KEY")), patch(
