@@ -7,7 +7,7 @@ Telegram bot for generating educational multiple-choice quizzes from lesson text
 - AI question generation with Groq/Gemini failover; validates four distinct options, answer indexes, duplicate questions, and the requested question count.
 - Quiz settings: 5/10/15/20 questions, easy/medium/hard, 10–60 second timer, and competitive/manual-review/publish-all modes.
 - Source input: reply to text/caption or upload PDF, DOCX, TXT, or a clear image. PDF extraction supports text-based PDFs; scanned PDFs should be sent as images. Image text extraction uses Gemini and requires GEMINI_API_KEY.
-- Library management: /library, /searchquiz, /previewquiz, /deletequiz (confirmation and ownership check), /copyquiz, /renamequiz, /editquiz, and /setcategory. Categories are searchable.
+- Library management: /library, /searchquiz, /previewquiz, /exportquiz (/printquiz), /deletequiz (confirmation and ownership check), /copyquiz, /renamequiz, /editquiz, and /setcategory. Categories are searchable.
 - Conversational AI in private chat: users can ask in Arabic, Algerian Arabic, or English how the bot works, search their library, request to play/delete/rename quizzes, ask for stats, or begin quiz creation using natural language. Search results include action buttons; deletion always requires a separate confirmation. The assistant classifies requests but all database actions are executed by trusted bot functions with ownership checks. Uses Groq/Gemini failover.
 - /assistant or /ask explains how to talk to the assistant. Normal private messages are treated as conversation unless a quiz setup/edit step is already waiting.
 - /stats shows personal saved-quiz totals and accumulated group score statistics. Common Arabic text aliases are supported for starting a quiz, opening the library, viewing the leaderboard, and opening personal statistics.
@@ -24,6 +24,8 @@ Telegram bot for generating educational multiple-choice quizzes from lesson text
 - /library — list your saved quizzes (private chat).
 - /searchquiz WORD — search saved quiz titles/source (private chat).
 - /previewquiz ID — inspect questions and answers (private chat).
+- /exportquiz ID or /printquiz ID — export all questions, options, correct answers, and explanations as one text message or a single printable TXT file.
+- At the end of a quiz/review, the bot sends a consolidated report with final results (for competitive exams), questions, options, and the correct answer key; long reports are sent as one TXT document.
 - /deletequiz ID — request deletion; confirm using the inline button (private chat).
 - /copyquiz ID — create an independent copy (private chat).
 - /renamequiz ID NEW_TITLE — rename a saved quiz (private chat).
