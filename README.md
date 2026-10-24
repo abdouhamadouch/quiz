@@ -47,6 +47,8 @@ Required:
 
 Optional:
 - GROQ_MODEL, GEMINI_MODEL.
+- DEFAULT_QUESTIONS: 5, 10, 15, or 20 (default 5).
+- DEFAULT_SECONDS: 10, 20, 30, 45, or 60 (default 20).
 - DATABASE_URL: PostgreSQL URL for durable hosted storage.
 - DATABASE_PATH: SQLite path when DATABASE_URL is unset.
 - LOG_LEVEL.
