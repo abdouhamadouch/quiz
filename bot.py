@@ -124,6 +124,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not saved:
             await msg.reply_text("لم أجد هذا الاختبار في مكتبتك.")
             return
+        existing = group_drafts.get(chat.id)
+        if existing and (
+            existing.get("owner_id") != owner_id or existing.get("quiz", {}).get("id") != quiz_id
+        ):
+            await msg.reply_text("توجد مسودة أخرى في انتظار البدء. اطلب من مشرف المجموعة إلغاءها باستخدام /cancel قبل مشاركة اختبار آخر.")
+            return
         group_drafts[chat.id] = {"quiz": saved, "owner_id": owner_id}
         save_group_draft(chat.id, owner_id, saved)
         await msg.reply_text(
@@ -939,6 +945,12 @@ async def share_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     saved = get_quiz(int(context.args[0]), user.id)
     if not saved:
         await msg.reply_text("لم أجد اختبارًا بهذا الرقم في مكتبتك.")
+        return
+    existing = group_drafts.get(chat.id)
+    if existing and (
+        existing.get("owner_id") != user.id or existing.get("quiz", {}).get("id") != saved["id"]
+    ):
+        await msg.reply_text("توجد مسودة أخرى في انتظار البدء. اطلب من مشرف المجموعة إلغاءها باستخدام /cancel قبل مشاركة اختبار آخر.")
         return
     group_drafts[chat.id] = {"quiz": saved, "owner_id": user.id}
     save_group_draft(chat.id, user.id, saved)
