@@ -23,6 +23,7 @@ from db import (
     get_quiz, init_db, leaderboard, list_quizzes, quiz_leaderboard, rename_quiz,
     reset_chat, save_group_draft, save_quiz, save_quiz_results, save_session_scores,
     set_quiz_category, update_quiz_questions, user_stats,
+    is_user_authorized, add_authorized_user, remove_authorized_user, get_authorized_users,
 )
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -53,6 +54,105 @@ sessions_lock = asyncio.Lock()
 
 def group_chat(chat_type: str) -> bool:
     return chat_type in (ChatType.GROUP, ChatType.SUPERGROUP)
+
+
+def creator_allowed(user_id: int) -> bool:
+    return user_id in OWNER_IDS or is_user_authorized(user_id)
+
+
+async def request_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not user:
+        return
+    if creator_allowed(user.id):
+        await msg.reply_text("لديك صلاحية إنشاء الاختبارات ونشرها.")
+        return
+    if not OWNER_IDS:
+        await msg.reply_text("لم تُضبط OWNER_IDS في متغيرات البيئة؛ لا يمكن إرسال طلب الموافقة.")
+        return
+    username_line = f"اسم المستخدم: @{user.username}\n" if user.username else ""
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("قبول صانع محتوى", callback_data=f"creator:approve:{user.id}"),
+        InlineKeyboardButton("رفض الطلب", callback_data=f"creator:reject:{user.id}"),
+    ]])
+    sent = 0
+    for owner_id in OWNER_IDS:
+        try:
+            await context.bot.send_message(
+                owner_id,
+                f"طلب صلاحية صانع محتوى جديد\nالاسم: {user.full_name[:100]}\n"
+                f"المعرّف: {user.id}\n{username_line}",
+                reply_markup=keyboard,
+            )
+            sent += 1
+        except Exception as exc:
+            log.warning("Could not deliver creator request to owner %s: %s", owner_id, type(exc).__name__)
+    await msg.reply_text("أُرسل طلبك إلى المالك للموافقة." if sent else
+                         "تعذّر إرسال الطلب. افتح محادثة البوت مع المالك أو تحقق من OWNER_IDS.")
+
+
+async def creators_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not user:
+        return
+    if user.id not in OWNER_IDS:
+        await msg.reply_text("هذا الأمر متاح لمالك البوت فقط.")
+        return
+    rows = get_authorized_users()
+    if not rows:
+        await msg.reply_text("لا يوجد صُنّاع محتوى معتمدون حاليًا. يمكن للمستخدم إرسال /requestaccess.")
+        return
+    text = "صُنّاع المحتوى المعتمدون:\n" + "\n".join(
+        f"• {row['user_id']} — أُضيف بواسطة {row['added_by']}" for row in rows
+    )
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"إلغاء صلاحية {row['user_id']}", callback_data=f"creator:revoke:{row['user_id']}")]
+        for row in rows[:20]
+    ])
+    await msg.reply_text(text, reply_markup=keyboard)
+
+
+async def creator_access_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.message:
+        return
+    if query.from_user.id not in OWNER_IDS:
+        await query.answer("هذا الإجراء متاح لمالك البوت فقط.", show_alert=True)
+        return
+    try:
+        _, action, raw_id = (query.data or "").split(":")
+        target_id = int(raw_id)
+    except (ValueError, TypeError):
+        await query.answer("طلب غير صالح.", show_alert=True)
+        return
+    if action == "approve":
+        add_authorized_user(target_id, query.from_user.id)
+        await query.answer("تم اعتماد صانع المحتوى.")
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(f"تم اعتماد المستخدم {target_id} صانعَ محتوى.")
+        try:
+            await context.bot.send_message(target_id, "وافق المالك على طلبك. يمكنك الآن إنشاء الاختبارات ونشرها في المجموعات.")
+        except Exception:
+            pass
+    elif action == "reject":
+        await query.answer("رُفض الطلب.")
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(f"رُفض طلب المستخدم {target_id}.")
+        try:
+            await context.bot.send_message(target_id, "لم تتم الموافقة على طلب صلاحية صانع المحتوى.")
+        except Exception:
+            pass
+    elif action == "revoke":
+        remove_authorized_user(target_id)
+        await query.answer("تم إلغاء الصلاحية.")
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(f"أُلغيت صلاحية صانع المحتوى للمستخدم {target_id}.")
+        try:
+            await context.bot.send_message(target_id, "أُلغيت صلاحية صانع المحتوى لحسابك.")
+        except Exception:
+            pass
+    else:
+        await query.answer("إجراء غير معروف.", show_alert=True)
 
 
 async def authorized(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -176,7 +276,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/editquiz ID رقم_السؤال — تعديل سؤال\n"
         "/quizresults ID — نتائج اختبار المجموعة\n"
         "/setcategory ID تصنيف — تصنيف الاختبار\n"
-        "/stats — إحصائياتك الشخصية"
+        "/stats — إحصائياتك الشخصية\n"
+        "/requestaccess — طلب صلاحية صانع محتوى\n"
+        "/creators — إدارة صُنّاع المحتوى (للمالك فقط)"
     )
 
 
@@ -261,8 +363,11 @@ async def quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg, chat, user = update.effective_message, update.effective_chat, update.effective_user
     if not msg or not chat or not user:
         return
-    if group_chat(chat.type) and not await authorized(update, context):
-        await msg.reply_text("إنشاء الاختبارات الجماعية متاح للمالك أو مشرفي المجموعة فقط. يمكنك إنشاء الاختبار في الخاص ثم مشاركته.")
+    if group_chat(chat.type) and not creator_allowed(user.id):
+        await msg.reply_text(
+            "إنشاء الاختبارات ونشرها في المجموعات متاح لصُنّاع المحتوى المعتمدين. "
+            "أرسل /requestaccess لطلب الموافقة، أو أنشئ اختبارًا في الخاص للاستخدام الشخصي."
+        )
         return
     source = ""
     if msg.reply_to_message:
@@ -987,6 +1092,9 @@ async def share_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if msg:
             await msg.reply_text("استخدم /sharequiz ID داخل المجموعة التي تريد نشر الاختبار فيها.")
         return
+    if not creator_allowed(user.id):
+        await msg.reply_text("مشاركة الاختبارات في المجموعات تتطلب صلاحية صانع محتوى. أرسل /requestaccess لطلبها.")
+        return
     if not context.args or not context.args[0].isdigit():
         await msg.reply_text("الصيغة: /sharequiz ID")
         return
@@ -1032,8 +1140,8 @@ async def launch_saved_review(update: Update, context: ContextTypes.DEFAULT_TYPE
     msg, chat, user = update.effective_message, update.effective_chat, update.effective_user
     if not msg or not chat or not user:
         return
-    if group_chat(chat.type) and not await authorized(update, context):
-        await msg.reply_text("نشر الاختبارات في المجموعة متاح للمالك أو مشرفي المجموعة فقط.")
+    if group_chat(chat.type) and not creator_allowed(user.id):
+        await msg.reply_text("نشر الاختبارات في المجموعة يتطلب صلاحية صانع محتوى. أرسل /requestaccess لطلبها.")
         return
     if not context.args or not context.args[0].isdigit():
         await msg.reply_text(f"الصيغة: /{'reviewquiz' if mode == 'review_manual' else 'publishquiz'} ID")
@@ -1418,6 +1526,9 @@ def main() -> None:
     app.add_handler(CommandHandler(["start", "help"], start))
     app.add_handler(CommandHandler(["assistant", "ask"], assistant_help))
     app.add_handler(CommandHandler("quiz", quiz))
+    app.add_handler(CommandHandler("requestaccess", request_access))
+    app.add_handler(CommandHandler("creators", creators_command))
+    app.add_handler(CallbackQueryHandler(creator_access_callback, pattern=r"^creator:(approve|reject|revoke):\d+$"))
     app.add_handler(CommandHandler("skip", skip_setup))
     app.add_handler(CommandHandler("library", show_library))
     app.add_handler(CommandHandler("searchquiz", search_quizzes))
