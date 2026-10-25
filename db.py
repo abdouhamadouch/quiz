@@ -132,6 +132,20 @@ def init_db() -> None:
             conn.execute("ALTER TABLE quiz_results ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at::timestamptz")
             conn.execute("ALTER TABLE quiz_results ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_quiz_results_chat_quiz ON quiz_results(chat_id, quiz_id, points DESC)")
+        if _USE_POSTGRES:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS authorized_users (
+                    user_id BIGINT PRIMARY KEY, added_by BIGINT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        else:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS authorized_users (
+                    user_id INTEGER PRIMARY KEY, added_by INTEGER NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_saved_quizzes_owner ON saved_quizzes(owner_id, id DESC)")
         conn.commit()
 
@@ -316,3 +330,37 @@ def user_stats(user_id: int) -> dict:
         return {"points": int(score["points"]), "correct": int(score["correct"]),
                 "answered": int(score["answered"]), "groups_count": int(score["groups_count"]),
                 "quiz_count": int(quizzes["quiz_count"])}
+
+
+
+def is_user_authorized(user_id: int) -> bool:
+    """Return whether a user has been approved as a quiz creator."""
+    with _lock, connect() as conn:
+        row = conn.execute(_sql("SELECT 1 FROM authorized_users WHERE user_id=?"), (int(user_id),)).fetchone()
+        return row is not None
+
+
+def add_authorized_user(user_id: int, added_by: int) -> bool:
+    """Approve a quiz creator; safe to call repeatedly."""
+    with _lock, connect() as conn:
+        cur = conn.execute(_sql("""
+            INSERT INTO authorized_users(user_id, added_by)
+            VALUES(?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET added_by=excluded.added_by
+        """), (int(user_id), int(added_by)))
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def remove_authorized_user(user_id: int) -> bool:
+    """Revoke creator permission without deleting that user's saved quizzes."""
+    with _lock, connect() as conn:
+        cur = conn.execute(_sql("DELETE FROM authorized_users WHERE user_id=?"), (int(user_id),))
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def get_authorized_users() -> list[dict]:
+    """List approved quiz creators."""
+    with _lock, connect() as conn:
+        return _rows(conn.execute("SELECT user_id, added_by, created_at FROM authorized_users ORDER BY user_id"))
