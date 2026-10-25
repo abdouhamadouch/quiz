@@ -66,7 +66,7 @@ def init_db() -> None:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS group_drafts (
                     chat_id BIGINT PRIMARY KEY, owner_id BIGINT NOT NULL, quiz_id BIGINT NOT NULL,
-                    quiz_json TEXT NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    quiz_json TEXT NOT NULL, message_thread_id BIGINT, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
             """)
         else:
@@ -91,7 +91,7 @@ def init_db() -> None:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS group_drafts (
                     chat_id INTEGER PRIMARY KEY, owner_id INTEGER NOT NULL, quiz_id INTEGER NOT NULL,
-                    quiz_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    quiz_json TEXT NOT NULL, message_thread_id INTEGER, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
             """)
         # Upgrade databases created by earlier versions without losing saved quizzes.
@@ -117,6 +117,14 @@ def init_db() -> None:
                 except sqlite3.OperationalError as exc:
                     if "duplicate column" not in str(exc).lower():
                         raise
+        if _USE_POSTGRES:
+            conn.execute("ALTER TABLE group_drafts ADD COLUMN IF NOT EXISTS message_thread_id BIGINT")
+        else:
+            try:
+                conn.execute("ALTER TABLE group_drafts ADD COLUMN message_thread_id INTEGER")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
         result_timestamp_type = "TIMESTAMPTZ" if _USE_POSTGRES else "TEXT"
         conn.execute(f"""
             CREATE TABLE IF NOT EXISTS quiz_results (
@@ -255,25 +263,26 @@ def copy_quiz(quiz_id: int, owner_id: int) -> int | None:
                      saved.get("seconds", 20), saved.get("mode", "exam"), saved.get("difficulty", "medium"), saved.get("category", "عام"))
 
 
-def save_group_draft(chat_id: int, owner_id: int, quiz: dict) -> None:
+def save_group_draft(chat_id: int, owner_id: int, quiz: dict, message_thread_id: int | None = None) -> None:
     payload = json.dumps(quiz, ensure_ascii=False, default=str)
     with _lock, connect() as conn:
         conn.execute(_sql("""
-            INSERT INTO group_drafts(chat_id,owner_id,quiz_id,quiz_json,updated_at)
-            VALUES(?,?,?,?,CURRENT_TIMESTAMP)
+            INSERT INTO group_drafts(chat_id,owner_id,quiz_id,quiz_json,message_thread_id,updated_at)
+            VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)
             ON CONFLICT(chat_id) DO UPDATE SET owner_id=excluded.owner_id,
-                quiz_id=excluded.quiz_id,quiz_json=excluded.quiz_json,updated_at=CURRENT_TIMESTAMP
-        """), (chat_id, owner_id, int(quiz["id"]), payload))
+                quiz_id=excluded.quiz_id,quiz_json=excluded.quiz_json,
+                message_thread_id=excluded.message_thread_id,updated_at=CURRENT_TIMESTAMP
+        """), (chat_id, owner_id, int(quiz["id"]), payload, message_thread_id))
         conn.commit()
 
 
 def get_group_drafts() -> dict[int, dict]:
     with _lock, connect() as conn:
-        rows = _rows(conn.execute("SELECT chat_id,owner_id,quiz_json FROM group_drafts"))
+        rows = _rows(conn.execute("SELECT chat_id,owner_id,quiz_json,message_thread_id FROM group_drafts"))
     result = {}
     for row in rows:
         try:
-            result[int(row["chat_id"])] = {"owner_id": int(row["owner_id"]), "quiz": json.loads(row["quiz_json"])}
+            result[int(row["chat_id"])] = {"owner_id": int(row["owner_id"]), "quiz": json.loads(row["quiz_json"]), "message_thread_id": row.get("message_thread_id")}
         except (ValueError, TypeError, json.JSONDecodeError):
             continue
     return result
