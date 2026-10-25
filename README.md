@@ -13,7 +13,8 @@ Telegram bot for generating educational multiple-choice quizzes from lesson text
 - /stats shows personal saved-quiz totals and accumulated group score statistics. Common Arabic text aliases are supported for starting a quiz, opening the library, viewing the leaderboard, and opening personal statistics.
 - Creating a quiz directly in a group and publishing saved review polls requires the bot owner or a group admin; direct group quizzes start after generation. /sharequiz ID instead creates a waiting draft, which the bot owner or a group admin starts with /startquiz. Drafts are stored in the configured database and can survive a restart.
 - /reviewquiz ID advances through native quiz polls manually; /publishquiz ID publishes all polls at once.
-- Timed competitive exams award 10 points per correct answer, show final rankings, and save overall and per-quiz group results. Use /quizresults ID in the group.
+- Timed competitive exams use native Telegram quiz polls (tap a poll option, not a custom answer button), award 10 points per correct answer, show final rankings, and save overall and per-quiz group results. Use /quizresults ID in the group.
+- Telegram forum topics are supported: start /quiz or /startquiz inside the target topic and questions, timeout feedback, and results are sent back to that same topic. The bot tracks one active quiz per group at a time.
 - /leaderboard, /reset, /end, /stop, and /cancel.
 - /health endpoint for Render health checks.
 
@@ -74,7 +75,7 @@ Saved quizzes, scores, per-quiz results, and waiting group drafts are stored in 
 
 - PDF extraction reads embedded text; image-only/scanned PDFs are not OCRed as a whole document. Send individual pages as images instead.
 - DOCX text and table cells are supported. Image OCR is performed by Gemini and may misread low-resolution or handwritten text.
-- Native Telegram quiz polls show correctness according to Telegram's poll UI. Manual review intentionally advances only when the creator or an admin presses “السؤال التالي”.
+- Native Telegram quiz polls show correctness according to Telegram's poll UI. Timed exams close each poll after the configured timer and score the first answer submitted by each participant. Manual review intentionally advances only when the creator or an admin presses “السؤال التالي”.
 - Publish-all review is not a competition and does not calculate scores.
 - Live Telegram operation and real provider API calls must be tested with actual secrets before production use.
 
