@@ -82,6 +82,22 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(stats["points"], 10)
         self.assertEqual(stats["groups_count"], 1)
 
+    def test_creator_authorization_crud(self):
+        self.assertFalse(db.is_user_authorized(303))
+        self.assertTrue(db.add_authorized_user(303, 101))
+        self.assertTrue(db.is_user_authorized(303))
+        self.assertEqual(db.get_authorized_users()[0]["user_id"], 303)
+        self.assertTrue(db.remove_authorized_user(303))
+        self.assertFalse(db.is_user_authorized(303))
+
+    def test_group_draft_preserves_topic_id(self):
+        quiz_id = db.save_quiz(101, "Topic test", "Lesson text", SAMPLE_QUESTIONS)
+        quiz = db.get_quiz(quiz_id, 101)
+        db.save_group_draft(-1001, 101, quiz, message_thread_id=77)
+        loaded = db.get_group_drafts()
+        self.assertEqual(loaded[-1001]["message_thread_id"], 77)
+        self.assertEqual(loaded[-1001]["quiz"]["id"], quiz_id)
+
     def test_init_is_safe_to_run_more_than_once(self):
         db.init_db()
         db.init_db()
