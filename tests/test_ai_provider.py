@@ -84,6 +84,22 @@ class QuestionValidationTests(unittest.TestCase):
         from ai_provider import normalize_assistant_intent
         self.assertIsNone(normalize_assistant_intent({"intent": "play_quiz", "quiz_id": 1.5})["quiz_id"])
 
+    def test_assistant_supports_general_chat_and_quiz_library_actions(self):
+        from ai_provider import normalize_assistant_intent
+
+        general = normalize_assistant_intent({
+            "intent": "chat", "reply": "The present perfect connects past events to the present."
+        })
+        self.assertEqual(general["intent"], "chat")
+        self.assertIn("present perfect", general["reply"].lower())
+
+        copied = normalize_assistant_intent({"intent": "copy_quiz", "query": "English grammar"})
+        previewed = normalize_assistant_intent({"intent": "preview_quiz", "quiz_id": 7})
+        self.assertEqual(copied["intent"], "copy_quiz")
+        self.assertEqual(copied["query"], "English grammar")
+        self.assertEqual(previewed["intent"], "preview_quiz")
+        self.assertEqual(previewed["quiz_id"], 7)
+
     def test_provider_error_details_are_not_exposed(self):
         ai_provider._preferred = "groq"
         with patch("ai_provider._groq", side_effect=RuntimeError("secret=TEST_KEY")), patch(
