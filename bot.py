@@ -250,7 +250,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await msg.reply_text("توجد مسودة أخرى في انتظار البدء. اطلب من مشرف المجموعة إلغاءها باستخدام /cancel قبل مشاركة اختبار آخر.")
             return
         group_drafts[chat.id] = {"quiz": saved, "owner_id": owner_id}
-        save_group_draft(chat.id, owner_id, saved)
+        save_group_draft(chat.id, owner_id, saved, getattr(msg, "message_thread_id", None))
         await msg.reply_text(
             f"تم تجهيز «{saved['title']}» ({len(saved['questions'])} سؤالًا) كمسودة في هذه المجموعة. "
             "لم يبدأ الامتحان بعد؛ على المالك أو أحد مشرفي المجموعة كتابة /startquiz."
@@ -1109,7 +1109,7 @@ async def share_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await msg.reply_text("توجد مسودة أخرى في انتظار البدء. اطلب من مشرف المجموعة إلغاءها باستخدام /cancel قبل مشاركة اختبار آخر.")
         return
     group_drafts[chat.id] = {"quiz": saved, "owner_id": user.id}
-    save_group_draft(chat.id, user.id, saved)
+    save_group_draft(chat.id, user.id, saved, getattr(msg, "message_thread_id", None))
     await msg.reply_text(
         f"تم تجهيز «{saved['title']}» ({len(saved['questions'])} سؤالًا) كمسودة امتحان. "
         "لم يبدأ بعد. اكتب /startquiz لبدئه أو /cancel لإلغائه."
@@ -1133,7 +1133,11 @@ async def start_shared_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     group_drafts.pop(chat.id, None)
     delete_group_draft(chat.id)
     saved = draft["quiz"]
-    await launch_quiz(context, chat.id, chat.type, draft["owner_id"], saved["questions"], int(saved.get("seconds", 20)), "exam", saved["id"], getattr(msg, "message_thread_id", None))
+    await launch_quiz(
+        context, chat.id, chat.type, draft["owner_id"], saved["questions"],
+        int(saved.get("seconds", 20)), "exam", saved["id"],
+        getattr(msg, "message_thread_id", None) or draft.get("message_thread_id"),
+    )
 
 
 async def launch_saved_review(update: Update, context: ContextTypes.DEFAULT_TYPE, mode: str) -> None:
