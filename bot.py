@@ -44,6 +44,7 @@ def _env_choice(name: str, default: int, allowed: set[int]) -> int:
 DEFAULT_QUESTIONS = _env_choice("DEFAULT_QUESTIONS", 5, {5, 10, 15, 20})
 DEFAULT_SECONDS = _env_choice("DEFAULT_SECONDS", 20, {10, 20, 30, 45, 60})
 sessions: dict[int, dict] = {}
+poll_sessions: dict[str, tuple[int, int]] = {}
 pending_setup: dict[tuple[int, int], dict] = {}
 group_drafts: dict[int, dict] = {}
 pending_question_edits: dict[tuple[int, int], dict] = {}
@@ -92,7 +93,7 @@ def config_text(cfg: dict) -> str:
     return (
         "إعداد الاختبار قبل الإنشاء\n"
         f"الموضوع: {topic}\nالمصدر: {source_state}\n"
-        "غيّر الخيارات من الأزرار، ثم اضغط «إنشاء الاختبار وحفظه»."
+        "غيّر الإعدادات من خيارات الإعداد، ثم اختر إنشاء الاختبار."
     )
 
 
@@ -118,13 +119,13 @@ async def send_copyable_content(message, content: str, filename: str, caption: s
     await message.reply_document(document=InputFile(buffer, filename=filename), caption=caption[:900])
 
 
-async def send_report(context: ContextTypes.DEFAULT_TYPE, chat_id: int, content: str, filename: str) -> None:
-    """Send a complete result and answer-key report in one Telegram message."""
+async def send_report(context: ContextTypes.DEFAULT_TYPE, chat_id: int, content: str, filename: str, message_thread_id: int | None = None) -> None:
+    """Send a complete result and answer-key report in one Telegram message, preserving forum topics."""
     if len(content) <= 3900:
-        await context.bot.send_message(chat_id=chat_id, text=content)
+        await context.bot.send_message(chat_id=chat_id, text=content, message_thread_id=message_thread_id)
         return
     buffer = io.BytesIO(content.encode('utf-8'))
-    await context.bot.send_document(chat_id=chat_id, document=InputFile(buffer, filename=filename), caption='التقرير الكامل للنسخ أو الطباعة.')
+    await context.bot.send_document(chat_id=chat_id, document=InputFile(buffer, filename=filename), caption='التقرير الكامل للنسخ أو الطباعة.', message_thread_id=message_thread_id)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg, chat, user = update.effective_message, update.effective_chat, update.effective_user
@@ -276,6 +277,7 @@ async def quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
     cfg = {
         "chat_id": chat.id, "chat_type": chat.type, "creator_id": user.id,
+        "message_thread_id": getattr(msg, "message_thread_id", None),
         "source": source.strip(), "topic": "", "count": DEFAULT_QUESTIONS, "seconds": DEFAULT_SECONDS,
         "difficulty": "medium", "mode": "exam",
     }
@@ -432,7 +434,7 @@ async def configure(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 f"حُفظ الاختبار في مكتبتك برقم #{quiz_id}، وعدد أسئلته {len(questions)}. المزود: {provider}."
             )
             await launch_quiz(context, cfg["chat_id"], cfg["chat_type"], cfg["creator_id"],
-                              questions, cfg["seconds"], cfg["mode"], quiz_id)
+                              questions, cfg["seconds"], cfg["mode"], quiz_id, cfg.get("message_thread_id"))
         return
     await query.edit_message_text(config_text(cfg), reply_markup=config_keyboard(cfg))
 
@@ -462,7 +464,7 @@ async def start_saved_private(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def launch_quiz(context: ContextTypes.DEFAULT_TYPE, chat_id: int, chat_type: str,
                       creator_id: int, questions: list[dict], seconds: int,
-                      mode: str, quiz_id: int | None = None) -> None:
+                      mode: str, quiz_id: int | None = None, message_thread_id: int | None = None) -> None:
     if chat_id in sessions:
         await context.bot.send_message(chat_id, "يوجد اختبار نشط في هذه المحادثة. أنهِه أولًا باستخدام /end.")
         return
@@ -470,7 +472,7 @@ async def launch_quiz(context: ContextTypes.DEFAULT_TYPE, chat_id: int, chat_typ
         "chat_id": chat_id, "chat_type": chat_type, "creator_id": creator_id,
         "questions": questions, "seconds": seconds, "index": 0, "scores": {},
         "answered": set(), "message_id": None, "timer": None, "mode": mode,
-        "poll_ids": [], "quiz_id": quiz_id,
+        "poll_ids": [], "poll_id": None, "message_thread_id": message_thread_id, "quiz_id": quiz_id,
         "quiz_title": (get_quiz(quiz_id, creator_id) or {}).get("title", "اختبار") if quiz_id is not None else "اختبار",
     }
     sessions[chat_id] = session
@@ -479,7 +481,7 @@ async def launch_quiz(context: ContextTypes.DEFAULT_TYPE, chat_id: int, chat_typ
     elif mode == "review_manual":
         await post_review_poll(context, session)
     else:
-        await context.bot.send_message(chat_id, "بدأ الامتحان التنافسي. أجب عن الأسئلة قبل انتهاء الوقت.")
+        await context.bot.send_message(chat_id, "بدأ الامتحان التنافسي. اختر إجابتك من استطلاع الكويز قبل انتهاء الوقت.", message_thread_id=message_thread_id)
         await post_exam_question(context, session)
 
 
@@ -489,11 +491,11 @@ async def post_review_poll(context: ContextTypes.DEFAULT_TYPE, session: dict) ->
     if index >= len(questions):
         sessions.pop(session["chat_id"], None)
         report = format_session_report(session)
-        await send_report(context, session["chat_id"], report, f"quiz_review_{session.get('quiz_id') or session['chat_id']}.txt")
+        await send_report(context, session["chat_id"], report, f"quiz_review_{session.get('quiz_id') or session['chat_id']}.txt", session.get("message_thread_id"))
         return
     q = questions[index]
     poll = await context.bot.send_poll(
-        chat_id=session["chat_id"],
+        chat_id=session["chat_id"], message_thread_id=session.get("message_thread_id"),
         question=f"{index + 1}/{len(questions)}. {q['question']}"[:300],
         options=[str(o)[:100] for o in q["options"]],
         type="quiz", correct_option_id=q["answer"], is_anonymous=False,
@@ -502,7 +504,7 @@ async def post_review_poll(context: ContextTypes.DEFAULT_TYPE, session: dict) ->
     session["poll_ids"].append(poll.message_id)
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("السؤال التالي ⏭", callback_data=f"pollnext:{session['chat_id']}:{index}")],
                                      [InlineKeyboardButton("إنهاء المراجعة", callback_data=f"pollend:{session['chat_id']}:{index}")]])
-    await context.bot.send_message(session["chat_id"], f"الاستفتاء {index + 1}/{len(questions)}. انتقل يدويًا عند الاستعداد.", reply_markup=keyboard)
+    await context.bot.send_message(session["chat_id"], f"الاستفتاء {index + 1}/{len(questions)}. انتقل يدويًا عند الاستعداد.", reply_markup=keyboard, message_thread_id=session.get("message_thread_id"))
 
 
 async def publish_all_polls(context: ContextTypes.DEFAULT_TYPE, session: dict) -> None:
@@ -510,7 +512,7 @@ async def publish_all_polls(context: ContextTypes.DEFAULT_TYPE, session: dict) -
     for index, q in enumerate(session["questions"]):
         try:
             poll = await context.bot.send_poll(
-                chat_id=chat_id, question=f"{index + 1}/{len(session['questions'])}. {q['question']}"[:300],
+                chat_id=chat_id, message_thread_id=session.get("message_thread_id"), question=f"{index + 1}/{len(session['questions'])}. {q['question']}"[:300],
                 options=[str(o)[:100] for o in q["options"]], type="quiz",
                 correct_option_id=q["answer"], is_anonymous=False,
                 explanation=q.get("explanation", "")[:200],
@@ -519,9 +521,9 @@ async def publish_all_polls(context: ContextTypes.DEFAULT_TYPE, session: dict) -
         except Exception:
             log.exception("Could not publish poll %s", index + 1)
     sessions.pop(chat_id, None)
-    await context.bot.send_message(chat_id, f"تم نشر {len(session['poll_ids'])} استفتاءات دفعة واحدة. تظهر الإجابة الصحيحة بعد تصويت كل مشارك.")
+    await context.bot.send_message(chat_id, f"تم نشر {len(session['poll_ids'])} استطلاعات كويز دفعة واحدة. تظهر الإجابة الصحيحة بعد تصويت كل مشارك.", message_thread_id=session.get("message_thread_id"))
     report = format_session_report(session)
-    await send_report(context, chat_id, report, f"quiz_review_{session.get('quiz_id') or chat_id}.txt")
+    await send_report(context, chat_id, report, f"quiz_review_{session.get('quiz_id') or chat_id}.txt", session.get("message_thread_id"))
 
 
 async def poll_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -546,7 +548,7 @@ async def poll_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         sessions.pop(chat_id, None)
         await query.edit_message_text("تم إنهاء المراجعة.")
         report = format_session_report(session)
-        await send_report(context, chat_id, report, f"quiz_review_{session.get('quiz_id') or chat_id}.txt")
+        await send_report(context, chat_id, report, f"quiz_review_{session.get('quiz_id') or chat_id}.txt", session.get("message_thread_id"))
         return
     if session["poll_ids"]:
         try:
@@ -559,11 +561,31 @@ async def poll_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # Telegram quiz polls reveal correctness directly to each voter. This handler is
-    # retained for future per-participant review analytics; no group-wide vote count is assumed.
+    """Record the first answer from each participant in a native Telegram quiz poll."""
     answer = update.poll_answer
-    if answer:
-        log.debug("Poll answer received for poll %s", answer.poll_id)
+    if not answer or not answer.user or not answer.option_ids:
+        return
+    mapped = poll_sessions.get(answer.poll_id)
+    if not mapped:
+        return
+    chat_id, index = mapped
+    session = sessions.get(chat_id)
+    if not session or session.get("mode") != "exam" or session.get("index") != index:
+        return
+    user = answer.user
+    if user.id in session["answered"]:
+        return
+    q = session["questions"][index]
+    option = answer.option_ids[0]
+    session["answered"].add(user.id)
+    score = session["scores"].setdefault(
+        user.id, {"name": user.full_name, "points": 0, "correct": 0, "answered": 0}
+    )
+    score["name"] = user.full_name
+    score["answered"] += 1
+    if option == q["answer"]:
+        score["points"] += 10
+        score["correct"] += 1
 
 
 async def post_exam_question(context: ContextTypes.DEFAULT_TYPE, session: dict) -> None:
@@ -573,17 +595,30 @@ async def post_exam_question(context: ContextTypes.DEFAULT_TYPE, session: dict) 
         return
     q = session["questions"][index]
     session["answered"] = set()
-    keyboard = [[InlineKeyboardButton(option, callback_data=f"ans:{chat_id}:{index}:{i}")]
-                for i, option in enumerate(q["options"])]
     try:
-        sent = await context.bot.send_message(
-            chat_id, f"السؤال {index + 1}/{len(session['questions'])}\nالوقت: {session['seconds']} ثانية\n\n{q['question']}",
-            reply_markup=InlineKeyboardMarkup(keyboard),
+        sent = await context.bot.send_poll(
+            chat_id=chat_id,
+            message_thread_id=session.get("message_thread_id"),
+            question=f"{index + 1}/{len(session['questions'])}. {q['question']}"[:300],
+            options=[str(option)[:100] for option in q["options"]],
+            type="quiz",
+            correct_option_id=q["answer"],
+            is_anonymous=False,
+            explanation=q.get("explanation", "")[:200],
+            open_period=session["seconds"],
         )
         session["message_id"] = sent.message_id
+        session["poll_id"] = sent.poll.id if sent.poll else None
+        if session["poll_id"]:
+            poll_sessions[session["poll_id"]] = (chat_id, index)
+        session["poll_ids"].append(sent.message_id)
     except Exception:
-        log.exception("Unable to post exam question")
+        log.exception("Unable to post native Telegram quiz poll")
         sessions.pop(chat_id, None)
+        await context.bot.send_message(
+            chat_id, "تعذّر نشر سؤال الكويز. تأكد أن البوت يستطيع إرسال الاستطلاعات في هذه المحادثة.",
+            message_thread_id=session.get("message_thread_id"),
+        )
         return
     session["timer"] = asyncio.create_task(timeout_question(context, chat_id, index, session["seconds"]))
 
@@ -595,9 +630,20 @@ async def timeout_question(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ind
         if not session or session["index"] != index or session.get("mode") != "exam":
             return
         q = session["questions"][index]
+        poll_id = session.get("poll_id")
+        if poll_id:
+            poll_sessions.pop(poll_id, None)
         try:
-            await context.bot.edit_message_reply_markup(chat_id, session["message_id"], reply_markup=None)
-            await context.bot.send_message(chat_id, f"انتهى الوقت. الإجابة الصحيحة: {q['options'][q['answer']]}\n{q.get('explanation', '')}".strip())
+            if session.get("message_id"):
+                try:
+                    await context.bot.stop_poll(chat_id, session["message_id"])
+                except Exception:
+                    pass
+            await context.bot.send_message(
+                chat_id,
+                f"انتهى الوقت. الإجابة الصحيحة: {q['options'][q['answer']]}\\n{q.get('explanation', '')}".strip(),
+                message_thread_id=session.get("message_thread_id"),
+            )
         except Exception:
             log.exception("Unable to send timeout feedback")
         session["index"] += 1
@@ -607,54 +653,6 @@ async def timeout_question(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ind
         return
 
 
-async def answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if not query:
-        return
-    try:
-        _, chat_raw, index_raw, option_raw = query.data.split(":")
-        chat_id, index, option = int(chat_raw), int(index_raw), int(option_raw)
-    except (ValueError, AttributeError):
-        await query.answer("زر غير صالح.", show_alert=True)
-        return
-    session = sessions.get(chat_id)
-    if not session or session.get("mode") != "exam" or session["index"] != index:
-        await query.answer("انتهى هذا السؤال.", show_alert=True)
-        return
-    user = query.from_user
-    if user.id in session["answered"]:
-        await query.answer("سُجّلت إجابتك بالفعل.")
-        return
-    q = session["questions"][index]
-    if option not in range(4):
-        await query.answer("اختيار غير صالح.", show_alert=True)
-        return
-    session["answered"].add(user.id)
-    score = session["scores"].setdefault(user.id, {"name": user.full_name, "points": 0, "correct": 0, "answered": 0})
-    score["name"], score["answered"] = user.full_name, score["answered"] + 1
-    correct = option == q["answer"]
-    if correct:
-        score["points"] += 10
-        score["correct"] += 1
-    await query.answer("صحيح! +10 نقاط" if correct else f"خطأ. الصحيح: {q['options'][q['answer']]}", show_alert=True)
-    if group_chat(session["chat_type"]):
-        try:
-            await context.bot.send_message(chat_id, f"{user.full_name}: {'إجابة صحيحة (+10)' if correct else 'إجابة غير صحيحة'}")
-        except Exception:
-            log.exception("Unable to post group feedback")
-    if session["chat_type"] == ChatType.PRIVATE:
-        timer = session.get("timer")
-        if timer:
-            timer.cancel()
-        try:
-            await context.bot.edit_message_reply_markup(chat_id, session["message_id"], reply_markup=None)
-            await context.bot.send_message(chat_id, f"{'إجابة صحيحة' if correct else 'الإجابة الصحيحة: ' + q['options'][q['answer']]}\n{q.get('explanation', '')}".strip())
-        except Exception:
-            log.exception("Unable to send private feedback")
-        session["index"] += 1
-        await post_exam_question(context, session)
-
-
 async def finish(context: ContextTypes.DEFAULT_TYPE, chat_id: int, cancelled: bool) -> None:
     session = sessions.pop(chat_id, None)
     if not session:
@@ -662,21 +660,29 @@ async def finish(context: ContextTypes.DEFAULT_TYPE, chat_id: int, cancelled: bo
     timer = session.get("timer")
     if timer and timer is not asyncio.current_task():
         timer.cancel()
+    poll_id = session.get("poll_id")
+    if poll_id:
+        poll_sessions.pop(poll_id, None)
+        if session.get("mode") == "exam" and session.get("message_id"):
+            try:
+                await context.bot.stop_poll(chat_id, session["message_id"])
+            except Exception:
+                pass
     if session.get("mode", "exam") != "exam":
         if cancelled:
-            await context.bot.send_message(chat_id, "أُلغيَت جلسة المراجعة.")
+            await context.bot.send_message(chat_id, "أُلغيَت جلسة المراجعة.", message_thread_id=session.get("message_thread_id"))
             return
         report = format_session_report(session)
-        await send_report(context, chat_id, report, f"quiz_review_{session.get('quiz_id') or chat_id}.txt")
+        await send_report(context, chat_id, report, f"quiz_review_{session.get('quiz_id') or chat_id}.txt", session.get("message_thread_id"))
         return
     if cancelled:
-        await context.bot.send_message(chat_id, "أُلغي الامتحان ولم تُحفظ نقاط هذه الجلسة.")
+        await context.bot.send_message(chat_id, "أُلغي الامتحان ولم تُحفظ نقاط هذه الجلسة.", message_thread_id=session.get("message_thread_id"))
         return
     save_session_scores(chat_id, session["scores"])
     if session.get("quiz_id") is not None:
         save_quiz_results(chat_id, int(session["quiz_id"]), session["scores"])
     report = format_session_report(session)
-    await send_report(context, chat_id, report, f"quiz_results_{session.get('quiz_id') or chat_id}.txt")
+    await send_report(context, chat_id, report, f"quiz_results_{session.get('quiz_id') or chat_id}.txt", session.get("message_thread_id"))
 
 
 async def end_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1019,7 +1025,7 @@ async def start_shared_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     group_drafts.pop(chat.id, None)
     delete_group_draft(chat.id)
     saved = draft["quiz"]
-    await launch_quiz(context, chat.id, chat.type, draft["owner_id"], saved["questions"], int(saved.get("seconds", 20)), "exam", saved["id"])
+    await launch_quiz(context, chat.id, chat.type, draft["owner_id"], saved["questions"], int(saved.get("seconds", 20)), "exam", saved["id"], getattr(msg, "message_thread_id", None))
 
 
 async def launch_saved_review(update: Update, context: ContextTypes.DEFAULT_TYPE, mode: str) -> None:
@@ -1039,7 +1045,7 @@ async def launch_saved_review(update: Update, context: ContextTypes.DEFAULT_TYPE
     if chat.id in sessions:
         await msg.reply_text("يوجد اختبار نشط في هذه المحادثة. أنهِه أولًا.")
         return
-    await launch_quiz(context, chat.id, chat.type, user.id, saved["questions"], int(saved.get("seconds", 20)), mode, saved["id"])
+    await launch_quiz(context, chat.id, chat.type, user.id, saved["questions"], int(saved.get("seconds", 20)), mode, saved["id"], getattr(msg, "message_thread_id", None))
 
 
 async def review_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1436,7 +1442,6 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(start_saved_private, pattern=r"^startprivate:"))
     app.add_handler(CallbackQueryHandler(confirm_delete_quiz, pattern=r"^quizdelete:(confirm|cancel):"))
     app.add_handler(CallbackQueryHandler(poll_navigation, pattern=r"^poll(next|end):"))
-    app.add_handler(CallbackQueryHandler(answer, pattern=r"^ans:"))
     app.add_handler(PollAnswerHandler(poll_answer))
     app.add_handler(MessageHandler(filters.Regex(r"^(اختبار|أنشئ اختبار|انشئ اختبار)$"), quiz))
     app.add_handler(MessageHandler(filters.Regex(r"^(مكتبتي|اختباراتي)$"), show_library))
