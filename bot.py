@@ -1097,12 +1097,18 @@ def _assistant_quiz_rows(user_id: int, intent: dict) -> list[dict]:
 
 def _assistant_result_keyboard(rows: list[dict]) -> InlineKeyboardMarkup:
     keyboard = []
-    for row in rows[:8]:
+    # Four quizzes fit in Telegram's compact inline keyboard without creating
+    # an excessively tall message. Each quiz has all four useful actions.
+    for row in rows[:4]:
         quiz_id = int(row["id"])
         seconds = int(row.get("seconds", 20))
         mode = row.get("mode", "exam")
         keyboard.append([
             InlineKeyboardButton(f"▶ لعب #{quiz_id}", callback_data=f"startprivate:{quiz_id}:{seconds}:{mode}"),
+            InlineKeyboardButton(f"معاينة #{quiz_id}", callback_data=f"assistant:preview:{quiz_id}"),
+        ])
+        keyboard.append([
+            InlineKeyboardButton(f"نسخ #{quiz_id}", callback_data=f"assistant:copy:{quiz_id}"),
             InlineKeyboardButton(f"حذف #{quiz_id}", callback_data=f"assistant:delete:{quiz_id}"),
         ])
     return InlineKeyboardMarkup(keyboard)
@@ -1329,6 +1335,37 @@ async def assistant_action_callback(update: Update, context: ContextTypes.DEFAUL
             ]]),
         )
         return
+    if action == "copy":
+        await query.answer()
+        new_id = copy_quiz(quiz_id, query.from_user.id)
+        if new_id is None:
+            await query.message.reply_text("لم أتمكن من نسخ الاختبار؛ تحقق من وجوده في مكتبتك.")
+        else:
+            await query.message.reply_text(
+                f"تم إنشاء نسخة مستقلة من «{saved['title']}» برقم #{new_id}."
+            )
+        return
+    if action == "preview":
+        await query.answer()
+        questions = saved.get("questions", [])
+        lines = [
+            f"معاينة الاختبار #{quiz_id}: {saved['title']}",
+            f"عدد الأسئلة: {len(questions)}",
+            "",
+        ]
+        for index, question in enumerate(questions[:5], 1):
+            lines.append(f"{index}. {question.get('question', '')}")
+            for option_index, option in enumerate(question.get("options", [])):
+                prefix = "✓" if option_index == question.get("answer") else "•"
+                lines.append(f"  {prefix} {option}")
+            explanation = question.get("explanation", "").strip()
+            if explanation:
+                lines.append(f"التفسير: {explanation}")
+            lines.append("")
+        if len(questions) > 5:
+            lines.append(f"تُعرض أول 5 أسئلة فقط. استخدم /previewquiz {quiz_id} للمعاينة الكاملة.")
+        await reply_lines_in_chunks(query.message, lines)
+        return
     await query.answer("إجراء غير مدعوم.", show_alert=True)
 
 
@@ -1405,7 +1442,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.Regex(r"^(مكتبتي|اختباراتي)$"), show_library))
     app.add_handler(MessageHandler(filters.Regex(r"^(المتصدرون|لوحة المتصدرين)$"), show_leaderboard))
     app.add_handler(MessageHandler(filters.Regex(r"^(إحصائياتي|احصائياتي)$"), show_stats))
-    app.add_handler(CallbackQueryHandler(assistant_action_callback, pattern=r"^assistant:(delete:\d+|list|create)$"))
+    app.add_handler(CallbackQueryHandler(assistant_action_callback, pattern=r"^assistant:(?:(?:delete|copy|preview):\d+|list|create)$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, assistant_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, collect_setup_text))
     app.add_handler(MessageHandler((filters.Document.ALL | filters.PHOTO) & ~filters.COMMAND, collect_setup_media))
