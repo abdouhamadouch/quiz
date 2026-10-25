@@ -523,7 +523,7 @@ async def publish_all_polls(context: ContextTypes.DEFAULT_TYPE, session: dict) -
     sessions.pop(chat_id, None)
     await context.bot.send_message(chat_id, f"تم نشر {len(session['poll_ids'])} استطلاعات كويز دفعة واحدة. تظهر الإجابة الصحيحة بعد تصويت كل مشارك.", message_thread_id=session.get("message_thread_id"))
     report = format_session_report(session)
-    await send_report(context, chat_id, report, f"quiz_review_{session.get('quiz_id') or chat_id}.txt")
+    await send_report(context, chat_id, report, f"quiz_review_{session.get('quiz_id') or chat_id}.txt", session.get("message_thread_id"))
 
 
 async def poll_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -660,6 +660,14 @@ async def finish(context: ContextTypes.DEFAULT_TYPE, chat_id: int, cancelled: bo
     timer = session.get("timer")
     if timer and timer is not asyncio.current_task():
         timer.cancel()
+    poll_id = session.get("poll_id")
+    if poll_id:
+        poll_sessions.pop(poll_id, None)
+        if session.get("mode") == "exam" and session.get("message_id"):
+            try:
+                await context.bot.stop_poll(chat_id, session["message_id"])
+            except Exception:
+                pass
     if session.get("mode", "exam") != "exam":
         if cancelled:
             await context.bot.send_message(chat_id, "أُلغيَت جلسة المراجعة.", message_thread_id=session.get("message_thread_id"))
