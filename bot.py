@@ -548,7 +548,7 @@ async def poll_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         sessions.pop(chat_id, None)
         await query.edit_message_text("تم إنهاء المراجعة.")
         report = format_session_report(session)
-        await send_report(context, chat_id, report, f"quiz_review_{session.get('quiz_id') or chat_id}.txt")
+        await send_report(context, chat_id, report, f"quiz_review_{session.get('quiz_id') or chat_id}.txt", session.get("message_thread_id"))
         return
     if session["poll_ids"]:
         try:
@@ -673,7 +673,7 @@ async def finish(context: ContextTypes.DEFAULT_TYPE, chat_id: int, cancelled: bo
             await context.bot.send_message(chat_id, "أُلغيَت جلسة المراجعة.", message_thread_id=session.get("message_thread_id"))
             return
         report = format_session_report(session)
-        await send_report(context, chat_id, report, f"quiz_review_{session.get('quiz_id') or chat_id}.txt")
+        await send_report(context, chat_id, report, f"quiz_review_{session.get('quiz_id') or chat_id}.txt", session.get("message_thread_id"))
         return
     if cancelled:
         await context.bot.send_message(chat_id, "أُلغي الامتحان ولم تُحفظ نقاط هذه الجلسة.", message_thread_id=session.get("message_thread_id"))
