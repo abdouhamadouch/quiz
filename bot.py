@@ -489,8 +489,8 @@ async def configure(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if query.from_user.id != cfg.get("creator_id"):
         await query.answer("هذه الإعدادات تخص الشخص الذي بدأها.", show_alert=True)
         return
-    if group_chat(query.message.chat.type) and action == "generate" and not await authorized(update, context):
-        await query.answer("إنشاء الاختبار الجماعي متاح للمالك أو مشرفي المجموعة فقط.", show_alert=True)
+    if group_chat(query.message.chat.type) and action == "generate" and not creator_allowed(query.from_user.id):
+        await query.answer("إنشاء الاختبارات الجماعية يتطلب صلاحية صانع محتوى.", show_alert=True)
         return
     await query.answer()
     if action == "cancel":
